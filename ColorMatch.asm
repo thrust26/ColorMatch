@@ -455,7 +455,6 @@ Start SUBROUTINE
 
 .mainLoop
     jsr     VerticalBlank
-    jsr     GameCalc
     jsr     DrawScreen
     jsr     OverScan
     jmp     .mainLoop
@@ -513,8 +512,6 @@ SetupColors
     bpl     .loopRows
 ; 2291 cycles = ~30.2 scanlines
 
-;    lda     #RED+2
-;    sta     COLUPF
     lda     colorLst_R+NUM_CELLS/2
     sta     targetCol
     rts
@@ -539,31 +536,25 @@ VerticalBlank SUBROUTINE
   ENDIF
     sta     TIM64T
 
-    rts
-; VerticalBlank
-
-;---------------------------------------------------------------
-GameCalc SUBROUTINE
-;---------------------------------------------------------------
 .colorPtrR  = tmpVars
 .colorPtrW  = tmpVars+2
 .tmpSwchA   = tmpVars
 
-DEBUG0
-    lda     SWCHA
+TIM_S
+    lax     SWCHA
     bit     SWCHB
     bvs     .normalDirs
 ; reverse directions
     lsr
     and     #%01011111
     sta     .tmpSwchA
-    lda     SWCHA
+    txa
     sec
     rol
     and     #%10101111
     ora     .tmpSwchA
-.normalDirs
     tax
+.normalDirs
     cpx     #$ff
     lda     moveSum
     bcc     .dirPressed
@@ -586,29 +577,26 @@ DEBUG0
     bpl     .downR
     asl
     bpl     .upR
-; right
-    ldx     #NUM_ROWS-1
+; shift colors right
+    ldy     #NUM_CELLS
 .loopRowsR
-    lda     MultTbl,x
-    sta     .colorPtrW
-    ora     #R_OFS
-    tay
-    dey
-    sty     .colorPtrR
-    ldy     #NUM_COLS
-    lda     (.colorPtrR),y      ;               R+x
+    lda     colorLst_R-1,y
     pha
     dey
+    ldx     #NUM_COLS-2
 .loopColsR
-    lda     (.colorPtrR),y      ; 5             R
-    sta     (.colorPtrW),y      ; 6             W+1
+    lda     colorLst_R-1,y      ; 4
+    sta     colorLst_W,y        ; 5
     dey                         ; 2
-    bne     .loopColsR          ; 3/2=14/13
+    dex                         ; 2
+    bpl     .loopColsR          ; 3/2=16/15
     pla
-    sta     (.colorPtrW),y      ; 6
-    dex
-    bpl     .loopRowsR
-    bmi     .skipDirsJmp
+    sta     colorLst_W,y
+    tya
+    bne     .loopRowsR
+TIM_R
+; 2013 cycles
+    beq     .skipDirsJmp
 
 ;---------------------------------------------------------------
 .downR
@@ -636,7 +624,10 @@ DEBUG0
     tay
     bcs     .loopColsDR
     ldy     #NUM_CELLS-NUM_COLS*2
-    jsr     LoadColumnDown
+    jsr     LoadColumnDown              ; TODO: replace with jmp
+TIM_DR
+; 2105 cycles
+    nop
 .skipDirsJmp
     jmp     .skipDirs
 
@@ -667,9 +658,9 @@ DEBUG0
     bcs     .loopColsUR
 ; load old right into left column:
     ldy     #NUM_CELLS-NUM_COLS
-    jsr     LoadColumnUp
-DEBUG2
-;    jmp     .skipDirs
+    jsr     LoadColumnUp                ; TODO: replace with jmp
+TIM_UR
+; 2037 cycles
     bne     .skipDirsJmp
     DEBUG_BRK
 
@@ -684,43 +675,33 @@ DEBUG2
     bpl     .downL
     asl
     bpl     .upL
-; shift colors left
-    ldx     #NUM_ROWS-1
-.loopRowsL
-    lda     MultTbl,x
-    sec
-    sbc     #1
-    sta     .colorPtrW
-  lda     #>colorLst_W
-  sbc     #0
-  sta     .colorPtrW+1
-    lda     MultTbl,x
-    ora     #R_OFS
-    sta     .colorPtrR
-
+; shift colors left:
     ldy     #0
-    lda     (.colorPtrR),y      ;               R
+.loopRowsL
+    lda     colorLst_R,y
     pha
     iny
+    ldx     #NUM_COLS-2
 .loopColsL
-    lda     (.colorPtrR),y      ; 5             R+1
-    sta     (.colorPtrW),y      ; 6             W
+    lda     colorLst_R,y        ; 4             R+1
+    sta     colorLst_W-1,y      ; 5             W
     iny                         ; 2
-    cpy     #NUM_COLS
-    bcc     .loopColsL          ; 3/2=14/13
+    dex                         ; 2
+    bpl     .loopColsL          ; 3/2=16/15
     pla
-    sta     (.colorPtrW),y      ; 6             W
-    dex
-    bpl     .loopRowsL
-    bmi     .skipDirsJmp
+    sta     colorLst_W-1,y
+    cpy     #NUM_CELLS
+    bcc     .loopRowsL
+TIM_L
+; 2018 cycles
+    bcs     .skipDirsJmp
 
 .downL
-DEBUG3
 ; move cells down left:
     jsr     SaveLeftColumn
     ldy     #0
-.loopColsDL
     clc
+.loopColsDL
     ldx     colorLst_R+1,y
 .loopRowsDL
     lda     colorLst_R+NUM_COLS*1+1,y   ; 4
@@ -731,7 +712,7 @@ DEBUG3
     adc     #NUM_COLS*2                 ; 2
     tay                                 ; 2
     cpy     #NUM_CELLS-NUM_COLS         ; 2
-    bcc     .loopRowsDL                 ; 3/2=29/28
+    bcc     .loopRowsDL                 ; 3/2=29/28 -> 14,5
     sbc     #NUM_CELLS-NUM_COLS-1
     tay
     txa
@@ -739,7 +720,9 @@ DEBUG3
     cpy     #NUM_COLS-1
     bcc     .loopColsDL
     ldy     #NUM_CELLS-NUM_COLS-1
-    jsr     LoadColumnDown
+    jsr     LoadColumnDown              ; TODO: replace with jmp
+TIM_DL
+; 2084 cycles
     jmp     .skipDirs
 
 ;---------------------------------------------------------------
@@ -769,7 +752,9 @@ DEBUG3
     bcc     .loopColsUL
 ; load old left into right column:
     ldy     #NUM_CELLS-1
-    jsr     LoadColumnUp
+    jsr     LoadColumnUp                ; TODO: replace with jmp
+TIM_UL
+; 2039 cycles
     bne     .skipDirs
     DEBUG_BRK
 
@@ -801,6 +786,8 @@ DEBUG3
 ;    txa
 ;    sta     colorLst_W+NUM_CELLS-NUM_COLS+1,y      ; wraps and causes RW-Trap!
     bcs     .loopColsD
+TIM_D
+; 1853 cycles
     bcc     .skipDirs
 ; (2534, 2222, 1897) 1819 cycles = ~23.9 scanlines
 
@@ -829,6 +816,9 @@ DEBUG3
     sta     colorLst_W-NUM_CELLS+NUM_COLS+1,y
     cpy     #NUM_CELLS-NUM_COLS
     bcs     .loopColsU
+TIM_U
+; 1834 cycles
+    nop
 ;    jmp     .skipDirs
 ; (2534, 2222, 1897) 1776 cycles = ~23.4 scanlines
 .skipUp
