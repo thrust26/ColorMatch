@@ -37,7 +37,6 @@ PLUSROM         = 0 ; (-~50)
   LIST OFF
     include vcs.h
     include tv_modes.h
-    include colors.h
   LIST ON
 
 
@@ -378,7 +377,7 @@ DrawScreen SUBROUTINE
     sta     GRP0
     sta     GRP1
     jsr     EnterKernel             ; @08
-    sty     COLUPF
+    sty     COLUPF                  ; Y = 0
     sty     GRP1
     lda     targetCol
     sta     COLUP0
@@ -399,7 +398,7 @@ DrawScreen SUBROUTINE
     sta     WSYNC
 ;---------------------------------------------------------------
 ;    ldy     #0
-    sty     PF0
+    sty     PF0                     ; Y = 0
     sty     PF1
     sty     PF2
     sty     GRP0
