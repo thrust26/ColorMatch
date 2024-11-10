@@ -59,7 +59,7 @@ NUM_CELLS       = NUM_ROWS * NUM_COLS
 
 MOVE_SPEED      = $20
 
-STACK_SIZE      = 6
+STACK_SIZE      = 4
 
 
 ;===============================================================================
@@ -547,11 +547,25 @@ GameCalc SUBROUTINE
 ;---------------------------------------------------------------
 .colorPtrR  = tmpVars
 .colorPtrW  = tmpVars+2
+.tmpSwchA   = tmpVars
 
 DEBUG0
-    lda     moveSum
-    ldx     SWCHA
+    lda     SWCHA
+    bit     SWCHB
+    bvs     .normalDirs
+; reverse directions
+    lsr
+    and     #%01011111
+    sta     .tmpSwchA
+    lda     SWCHA
+    sec
+    rol
+    and     #%10101111
+    ora     .tmpSwchA
+.normalDirs
+    tax
     cpx     #$ff
+    lda     moveSum
     bcc     .dirPressed
     lda     #MOVE_SPEED-1
 .dirPressed
