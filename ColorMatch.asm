@@ -21,7 +21,7 @@ PAL60           = 1
 PAL50           = 0
   ENDIF
 
-F8SC            = 0     ; create F8SC instead of 4KSC (for Harmony)
+F8SC            = 1     ; create F8SC instead of 4KSC (for Harmony)
 
 ILLEGAL         = 1
 DEBUG           = 1
@@ -37,6 +37,7 @@ PLUSROM         = 0 ; (-~50)
   LIST OFF
     include vcs.h
     include tv_modes.h
+    include jtz_macros.asm
   LIST ON
 
 
@@ -69,13 +70,15 @@ STACK_SIZE      = 4
     SEG.U   variables
     ORG     $80
 
-RAMKernel       ds KernelCodeEnd - KernelCode ; (48 bytes reserved for RAM kernel)
 frameCnt        .byte
 tmpVars         ds 10
 randomLo        .byte
 randomHi        .byte
 targetCol       .byte
 moveSum         .byte
+sound           .byte
+
+RAMKernel       ds KernelCodeEnd - KernelCode ; (48 bytes reserved for RAM kernel)
 
 RAM_END         = .
 
@@ -111,13 +114,13 @@ DEBUG_BYTES SET DEBUG_BYTES + 1
     ENDIF
   ENDM
 
-  MAC NOP_IMM   ; skip 1 byte, 2 cycles
-    .byte   $82
-  ENDM
-
-  MAC NOP_B     ; skip 1 byte, 3 cycles
-    .byte   $04
-  ENDM
+;  MAC NOP_IMM   ; skip 1 byte, 2 cycles
+;    .byte   $82
+;  ENDM
+;
+;  MAC NOP_B     ; skip 1 byte, 3 cycles
+;    .byte   $04
+;  ENDM
 
   MAC NOP_W     ; skip 2 bytes, 4 cycles
     .byte   $0c
@@ -130,111 +133,6 @@ DEBUG_BYTES SET DEBUG_BYTES + 1
 ;  MAC BIT_W     ; skip 2 bytes, 4 cycles
 ;    .byte   $2c
 ;  ENDM
-
-  MAC SLEEP
-    IF {1} = 1
-      ECHO "ERROR: SLEEP 1 not allowed !"
-      END
-    ENDIF
-    IF {1} & 1
-      nop $00
-      REPEAT ({1}-3)/2
-        nop
-      REPEND
-    ELSE
-      REPEAT ({1})/2
-        nop
-      REPEND
-    ENDIF
-  ENDM
-
-  MAC _CHECKPAGE ; internal, do not use directly
-    IF >{1} != >{2}
-      ECHO ""
-     IF {3} != ""
-      ECHO "ERROR: different pages! (", {3}, "=", {2}, ",", {1}, ")"
-     ELSE
-      ECHO "ERROR: different pages! (", {2}, ",", {1}, ")"
-     ENDIF
-      ECHO ""
-      ERR
-    ENDIF
-  ENDM
-
-  MAC CHECKPAGE_LBL
-    _CHECKPAGE ., {1}, {2}
-  ENDM
-
-  MAC CHECKPAGE
-    CHECKPAGE_LBL {1}, ""
-  ENDM
-
-  MAC CHECKPAGE_DATA_LBL
-_ADDR SET . - 1 ; hack to convince DASM
-    _CHECKPAGE _ADDR, {1}, {2}
-  ENDM
-
-  MAC CHECKPAGE_DATA
-    CHECKPAGE_DATA_LBL {1}, ""
-  ENDM
-
-  MAC VERSION_STR
-    .byte   ((VERSION & $f00) >> 8) + 48
-    .byte   "."
-    .byte   ((VERSION & $0f0) >> 4) + 48
-    .byte   ((VERSION & $00f) >> 0) + 48
-  ENDM
-
-;---------------------------------------------------------------
-; Free space macros
-;---------------------------------------------------------------
-ECHO_FREE SET 1     ; 1 = echo free space enabled
-FREE_TOTAL SET 0    ; use only once
-
-  MAC OUT_FREE
-FREE_GAP$ SET - .
-    {1} {2}
-FREE_GAP$  SET FREE_GAP$  + .
-FREE_TOTAL SET FREE_TOTAL + FREE_GAP$
-   IF ECHO_FREE && FREE_GAP$ > 0
-    ECHO "@", ., ": Gap:", [FREE_GAP$]d, "; Total:", [FREE_TOTAL]d, ";", {3}, {2}, {4}
-   ENDIF
-  ENDM
-
-  MAC ALIGN_FREE_LBL
-    LIST OFF
-    OUT_FREE ALIGN, {1}, "ALIGN", {2}
-    LIST ON
-  ENDM
-
-  MAC ALIGN_FREE
-    LIST OFF
-    ALIGN_FREE_LBL {1}, ""
-  ENDM
-
-  MAC COND_ALIGN_FREE_LBL ; space required, alignement, "label"
-;    LIST OFF
-   IF (>(. + {1} - 1)) > (>.)
-    ALIGN_FREE_LBL {2}, {3}
-   ENDIF
-    LIST ON
-  ENDM
-
-  MAC COND_ALIGN_FREE ; space required, alignement
-;    LIST OFF
-    COND_ALIGN_FREE_LBL {1}, {2}, ""
-  ENDM
-
-  MAC ORG_FREE_LBL
-    LIST OFF
-    OUT_FREE ORG, {1}, "ORG", {2}
-    LIST ON
-  ENDM
-
-  MAC ORG_FREE
-    LIST OFF
-    ORG_FREE_LBL {1}, ""
-  ENDM
 
 
   MAC KERNEL_CODE
@@ -282,8 +180,8 @@ Col12
     bne     .loopKernel         ; 3/2
     rts                         ; 6         @08
 KernelCodeEnd
-EnterKernel = RAMKernel + .enterKernel - KernelCode
 
+EnterKernel = RAMKernel + .enterKernel - KernelCode
 PD = KernelCode - RAMKernel     ; patch delta
   ENDM
 
@@ -294,38 +192,18 @@ PD = KernelCode - RAMKernel     ; patch delta
     SEG     Bank0
     ORG     BASE_ADR
 
+    NEXT_PASS
+
     ds      256, $55
 
 ;---------------------------------------------------------------
 DrawScreen SUBROUTINE
 ;---------------------------------------------------------------
-.tmpStack   = tmpVars
-.rowCount   = tmpVars+1
-.carry      = tmpVars+2
-.colorPtr   = tmpVars+3
-.tmpColP0   = tmpVars+5
-.tmpColP1   = tmpVars+6
-
-    tsx
-    stx     .tmpStack
-
-    lda     #%01100000
-    sta     PF0
-    lda     #%11011011
-    sta     PF1
-    asl                     ; #%10110110
-    sta     PF2
-;    lda     #%10010010
-;    sta     PF0
-;    lsr                     ; #%01001001
-;    sta     PF2
-;    lsr                     ; #%00100100
-;    sta     PF1
-
-    lda     #<colorLst_R + NUM_COLS * (NUM_ROWS - 1)
-    sta     .colorPtr
-    lda     #>colorLst_R
-    sta     .colorPtr+1
+.rowCount   = tmpVars
+;.carry      = tmpVars+1
+.colorPtr   = tmpVars+2
+.tmpColP0   = tmpVars+4
+.tmpColP1   = tmpVars+5
 
 ;    lda     #0
 ;    bit     SWCHB
@@ -342,25 +220,41 @@ DrawScreen SUBROUTINE
     sta     WSYNC
 ;---------------------------------------
     sta     VBLANK
-    stx     TIM64T
+    stx     TIM64T              ;  =  7
+
+    lda     #<colorLst_R + NUM_COLS * (NUM_ROWS - 1)
+    sta     .colorPtr
+    lda     #>colorLst_R
+    sta     .colorPtr+1         ;  = 10
+
+    lda     #%01100000
+    sta     PF0
+    lda     #%11011011
+    sta     PF1
+    asl                         ;           #%10110110
+    sta     PF2                 ;  = 15
+;    lda     #%10010010
+;    sta     PF0
+;    lsr                         ;           #%01001001
+;    sta     PF2
+;    lsr                         ;           #%00100100
+;    sta     PF1                 ;  = 15
 
     ldy     #NUM_ROWS-1
-    sty     .rowCount
-    SLEEP   38
+    sty     .rowCount           ;  = 5
+    SLEEP   13
 ;---------------------------------------------------------------
-.loopRows
-;    sta     WSYNC
-;---------------------------------------
+.loopRows                       ;           @50/51
     clc                         ; 2
     ldy     #NUM_COLS-1         ; 2 =  4
 .loopPatch
     lda     (.colorPtr),y       ; 5
     ldx     PatchTbl,y          ; 4
-;    adc     .carry              ; 3
+;    adc     .carry              ; 3         flicker two colors together
     sta     $00,x               ; 4
     dey                         ; 2
     bpl     .loopPatch          ; 3/2=21/20
-; 4 + 21 * 13 - 1 = 276
+; 4 + (21 - 3) * 13 - 1 = 276 - 39
 
     lda     .colorPtr
 ;    sec
@@ -381,7 +275,7 @@ DrawScreen SUBROUTINE
     sty     GRP1
     lda     targetCol
     sta     COLUP0
-; enable focus
+; enable target cursor:
     ldx     #%10110110
     lda     .rowCount
     eor     #NUM_ROWS/2
@@ -398,11 +292,11 @@ DrawScreen SUBROUTINE
     sta     WSYNC
 ;---------------------------------------------------------------
 ;    ldy     #0
-    sty     PF0                     ; Y = 0
-    sty     PF1
-    sty     PF2
-    sty     GRP0
-    sty     GRP1
+;    sty     PF0
+;    sty     PF1
+;    sty     PF2
+;    sty     GRP0
+;    sty     GRP1
 
     ldx     #2
 .waitScreen
@@ -411,9 +305,6 @@ DrawScreen SUBROUTINE
     sta     WSYNC
 ;---------------------------------------
     stx     VBLANK
-
-    ldx     .tmpStack
-    txs
     rts
 
 .skipCursorWait
@@ -421,17 +312,20 @@ DrawScreen SUBROUTINE
     bne     .skipCursor
 ; /DrawScreen
 
+KernelCode ; patched into
+    KERNEL_CODE
+
 PatchTbl
     .byte   Col0 + 1 - PD
     .byte   Col1 + 1 - PD
     .byte   Col2 + 1 - PD
     .byte   Col3 + 1 - PD
     .byte   Col4 + 1 - PD
-    .byte   .tmpColP0 ;COLUP0
+    .byte   .tmpColP0       ; -> COLUP0
     .byte   Col6 + 1 - PD
     .byte   Col7 + 1 - PD
     .byte   Col8 + 1 - PD
-    .byte   .tmpColP1 ;COLUP1
+    .byte   .tmpColP1       ; -> COLUP1
     .byte   Col10 + 1 - PD
     .byte   Col11 + 1 - PD
     .byte   Col12 + 1 - PD
@@ -536,8 +430,6 @@ VerticalBlank SUBROUTINE
   ENDIF
     sta     TIM64T
 
-.colorPtrR  = tmpVars
-.colorPtrW  = tmpVars+2
 .tmpSwchA   = tmpVars
 
 TIM_S
@@ -563,9 +455,6 @@ TIM_S
     sbc     #MOVE_SPEED-1
     sta     moveSum
     bcs     .skipDirsJmp
-    lda     #>colorLst_W
-    sta     .colorPtrW+1
-    sta     .colorPtrR+1
     txa
     bpl     .doRight
     jmp     .skipRight
@@ -577,7 +466,7 @@ TIM_S
     bpl     .downR
     asl
     bpl     .upR
-; shift colors right
+; shift colors right:
     ldy     #NUM_CELLS
 .loopRowsR
     lda     colorLst_R-1,y
@@ -585,24 +474,25 @@ TIM_S
     dey
     ldx     #NUM_COLS-2
 .loopColsR
-    lda     colorLst_R-1,y      ; 4
-    sta     colorLst_W,y        ; 5
-    dey                         ; 2
-    dex                         ; 2
-    bpl     .loopColsR          ; 3/2=16/15
+    lda     colorLst_R-1,y              ; 4
+    sta     colorLst_W,y                ; 5
+    dey                                 ; 2
+    dex                                 ; 2
+    bpl     .loopColsR                  ; 3/2=16/15
     pla
     sta     colorLst_W,y
     tya
     bne     .loopRowsR
 TIM_R
-; 2013 cycles
-    beq     .skipDirsJmp
+; 2005 cycles
+    nop
+.skipDirsJmp
+    jmp     .skipDirs
 
 ;---------------------------------------------------------------
 .downR
-; save right column:
+; move cells down right:
     jsr     SaveRightColumn
- ; move cells down right:
     ldy     #NUM_COLS-2
 .loopColsDR
     clc
@@ -624,18 +514,14 @@ TIM_R
     tay
     bcs     .loopColsDR
     ldy     #NUM_CELLS-NUM_COLS*2
-    jsr     LoadColumnDown              ; TODO: replace with jmp
 TIM_DR
-; 2105 cycles
-    nop
-.skipDirsJmp
-    jmp     .skipDirs
+; 1913 cycles
+    jmp     .loadColumnDown
 
 ;---------------------------------------------------------------
 .upR
-; save right column:
-    jsr     SaveRightColumn
 ; move cells up right:
+    jsr     SaveRightColumn
     ldy     #NUM_CELLS-NUM_COLS-2
 .loopColsUR
     ldx     colorLst_R+NUM_COLS,y
@@ -658,11 +544,9 @@ TIM_DR
     bcs     .loopColsUR
 ; load old right into left column:
     ldy     #NUM_CELLS-NUM_COLS
-    jsr     LoadColumnUp                ; TODO: replace with jmp
 TIM_UR
-; 2037 cycles
-    bne     .skipDirsJmp
-    DEBUG_BRK
+; 1845 cycles
+    jmp     .loadColumnUp
 
 ;---------------------------------------------------------------
 .skipRight
@@ -675,7 +559,7 @@ TIM_UR
     bpl     .downL
     asl
     bpl     .upL
-; shift colors left:
+; move cells left:
     ldy     #0
 .loopRowsL
     lda     colorLst_R,y
@@ -683,18 +567,18 @@ TIM_UR
     iny
     ldx     #NUM_COLS-2
 .loopColsL
-    lda     colorLst_R,y        ; 4             R+1
-    sta     colorLst_W-1,y      ; 5             W
-    iny                         ; 2
-    dex                         ; 2
-    bpl     .loopColsL          ; 3/2=16/15
+    lda     colorLst_R,y                ; 4
+    sta     colorLst_W-1,y              ; 5
+    iny                                 ; 2
+    dex                                 ; 2
+    bpl     .loopColsL                  ; 3/2=16/15
     pla
     sta     colorLst_W-1,y
     cpy     #NUM_CELLS
     bcc     .loopRowsL
 TIM_L
-; 2018 cycles
-    bcs     .skipDirsJmp
+; 2117 cycles (.loopColsL crosses page)
+    bcs     .skipDirsJmp2
 
 .downL
 ; move cells down left:
@@ -720,16 +604,33 @@ TIM_L
     cpy     #NUM_COLS-1
     bcc     .loopColsDL
     ldy     #NUM_CELLS-NUM_COLS-1
-    jsr     LoadColumnDown              ; TODO: replace with jmp
 TIM_DL
-; 2084 cycles
+; 1893 cycles
+    nop
+.loadColumnDown
+TIM_SLD
+    lda     colorBuf_R              ; saved bottom cell
+    sta     colorLst_W+NUM_COLS,y   ; ...to top cell
+    ldx     #NUM_ROWS-1
+    sec
+.loopLoadDown
+    lda     colorBuf_R,x
+    sta     colorLst_W,y
+    tya
+    sbc     #NUM_COLS
+    tay
+    dex
+    bne     .loopLoadDown
+TIM_LD
+; 172 cycles
+    nop
+.skipDirsJmp2
     jmp     .skipDirs
 
 ;---------------------------------------------------------------
 .upL
-; save left column:
+; move cells up left:
     jsr     SaveLeftColumn
-; move cells:
     ldy     #NUM_CELLS-NUM_COLS*2+1
 .loopColsUL
     ldx     colorLst_R+NUM_COLS,y
@@ -752,10 +653,26 @@ TIM_DL
     bcc     .loopColsUL
 ; load old left into right column:
     ldy     #NUM_CELLS-1
-    jsr     LoadColumnUp                ; TODO: replace with jmp
 TIM_UL
-; 2039 cycles
-    bne     .skipDirs
+; 1847 cycles
+    nop
+TIM_SLU
+.loadColumnUp
+    ldx     #NUM_ROWS-2
+    sec
+.loopLoadUp
+    lda     colorBuf_R,x
+    sta     colorLst_W,y
+    tya
+    sbc     #NUM_COLS
+    tay
+    dex
+    bpl     .loopLoadUp
+    lda     colorBuf_R+NUM_ROWS-1   ; saved top cell
+    sta     colorLst_W,y            ; ...to bottom cell
+TIM_LU
+; 172 cycles
+    bcs     .skipDirs
     DEBUG_BRK
 
 ;---------------------------------------------------------------
@@ -763,21 +680,21 @@ TIM_UL
 .skipLeft
     asl
     bmi     .skipDown
-; shift colors down:
+; move cells down:
     ldy     #NUM_COLS-1
 .loopColsD
     clc
     ldx     colorLst_R,y
 .loopRowsD
-    lda     colorLst_R+NUM_COLS*1,y ; 4
-    sta     colorLst_W+NUM_COLS*0,y ; 5
-    lda     colorLst_R+NUM_COLS*2,y ; 4
-    sta     colorLst_W+NUM_COLS*1,y ; 5
-    tya                             ; 2
-    adc     #NUM_COLS*2             ; 2
-    tay                             ; 2
-    cpy     #NUM_CELLS-NUM_COLS     ; 2
-    bcc     .loopRowsD              ; 3/2=29/28
+    lda     colorLst_R+NUM_COLS*1,y     ; 4
+    sta     colorLst_W+NUM_COLS*0,y     ; 5
+    lda     colorLst_R+NUM_COLS*2,y     ; 4
+    sta     colorLst_W+NUM_COLS*1,y     ; 5
+    tya                                 ; 2
+    adc     #NUM_COLS*2                 ; 2
+    tay                                 ; 2
+    cpy     #NUM_CELLS-NUM_COLS         ; 2
+    bcc     .loopRowsD                  ; 3/2=29/28
     txa
     sta     colorLst_W,y
     tya
@@ -787,7 +704,7 @@ TIM_UL
 ;    sta     colorLst_W+NUM_CELLS-NUM_COLS+1,y      ; wraps and causes RW-Trap!
     bcs     .loopColsD
 TIM_D
-; 1853 cycles
+; 1845 cycles
     bcc     .skipDirs
 ; (2534, 2222, 1897) 1819 cycles = ~23.9 scanlines
 
@@ -795,21 +712,21 @@ TIM_D
 .skipDown
     asl
     bmi     .skipUp
-; shift colors up:
+; move cells up:
     ldy     #NUM_CELLS-1
     sec
 .loopColsU
     ldx     colorLst_R,y
 .loopRowsU
-    lda     colorLst_R-NUM_COLS*1,y ; 4
-    sta     colorLst_W-NUM_COLS*0,y ; 5
-    lda     colorLst_R-NUM_COLS*2,y ; 4
-    sta     colorLst_W-NUM_COLS*1,y ; 5
-    tya                             ; 2
-    sbc     #NUM_COLS*2             ; 2
-    tay                             ; 2
-    cpy     #NUM_COLS               ; 2
-    bcs     .loopRowsU              ; 3/2=29/28
+    lda     colorLst_R-NUM_COLS*1,y     ; 4
+    sta     colorLst_W-NUM_COLS*0,y     ; 5
+    lda     colorLst_R-NUM_COLS*2,y     ; 4
+    sta     colorLst_W-NUM_COLS*1,y     ; 5
+    tya                                 ; 2
+    sbc     #NUM_COLS*2                 ; 2
+    tay                                 ; 2
+    cpy     #NUM_COLS                   ; 2
+    bcs     .loopRowsU                  ; 3/2=29/28
     adc     #NUM_CELLS-NUM_COLS-1
     tay
     txa
@@ -817,10 +734,9 @@ TIM_D
     cpy     #NUM_CELLS-NUM_COLS
     bcs     .loopColsU
 TIM_U
-; 1834 cycles
+; 1826 cycles
     nop
 ;    jmp     .skipDirs
-; (2534, 2222, 1897) 1776 cycles = ~23.4 scanlines
 .skipUp
 .skipDirs
 
@@ -855,45 +771,6 @@ SaveLeftColumn
     rts
 
 ;---------------------------------------------------------------
-LoadColumnDown SUBROUTINE
-;---------------------------------------------------------------
-    lda     colorBuf_R
-    sta     colorLst_W+NUM_COLS,y
-    ldx     #NUM_ROWS-1
-    sec
-.loopLoad
-    lda     colorBuf_R,x
-    sta     colorLst_W,y
-    tya
-    sbc     #NUM_COLS
-    tay
-    dex
-    bne     .loopLoad
-    rts
-
-;---------------------------------------------------------------
-LoadColumnUp SUBROUTINE
-;---------------------------------------------------------------
-    ldx     #NUM_ROWS-2
-    sec
-.loopLoad
-    lda     colorBuf_R,x
-    sta     colorLst_W,y
-    tya
-    sbc     #NUM_COLS
-    tay
-    dex
-    bpl     .loopLoad
-    lda     colorBuf_R+NUM_ROWS-1
-    sta     colorLst_W,y
-    rts
-
-;---------------------------------------------------------------
-KernelCode SUBROUTINE       ;               patched into
-;---------------------------------------------------------------
-    KERNEL_CODE
-
-;---------------------------------------------------------------
 OverScan SUBROUTINE
 ;---------------------------------------------------------------
   IF NTSC_TIM
@@ -904,10 +781,33 @@ OverScan SUBROUTINE
     sta     TIM64T
 
 ; check for color match:
-    ldx     #0
+    bit     SWCHB
+    bpl     .coarseCheck
     lda     colorLst_R+NUM_CELLS/2
     cmp     targetCol
     bne     .skipNewCol
+    beq     .foundTargetCol
+
+.coarseCheck
+    ldy     #INDEX_LEN-1
+.loopCheck
+    ldx     IndexTbl,y
+    lda     colorLst_R,x
+    cmp     targetCol
+;    beq     .foundTargetCol
+    bne     .nextIndex
+    sbc     colorLst_R+NUM_CELLS/2
+    and     #$0f
+    cmp     #$02+1
+    bcc     .foundTargetCol
+    cmp     #$0e
+    bcs     .foundTargetCol
+.nextIndex
+    dey
+    bpl     .loopCheck
+    bmi     .skipNewCol
+
+.foundTargetCol
     jsr     NextRandom
     and     #$7f
     cmp     #NUM_CELLS
@@ -917,15 +817,44 @@ OverScan SUBROUTINE
     tay
     lda     colorLst_R,y
     sta     targetCol
-    ldx     #$0e            ; flash
+    lda     #DECAY_LEN
+    sta     sound
+    lda     #$04
+    sta     AUDC0
+    lda     #$0e
+    sta     AUDF0
 .skipNewCol
-    stx     COLUBK
+
+; continue sound:
+    ldy     sound
+    beq     .skipSound
+    lda     VolumeTbl-1,y
+    sta     AUDV0
+    dec     sound
+.skipSound
 
 .waitTim
     lda     INTIM
     bne     .waitTim
     rts
-; OverScan
+; /OverScan
+
+IndexTbl
+    .byte   NUM_CELLS/2-NUM_COLS
+    .byte   NUM_CELLS/2-1
+    .byte   NUM_CELLS/2
+    .byte   NUM_CELLS/2+1
+    .byte   NUM_CELLS/2+NUM_COLS
+INDEX_LEN = . - IndexTbl
+
+VolumeTbl
+    .byte   0
+    ds      8, 1
+    ds      4, 2
+    ds      2, 3
+    ds      2, 4
+    .byte   5, 6, 7, 8, 9, 10
+DECAY_LEN = . - VolumeTbl
 
 ;---------------------------------------------------------------
 NextRandom SUBROUTINE
@@ -1095,6 +1024,8 @@ _IDX    SET 0
 _IDX    SET _IDX + 1
     REPEND
 
+    .byte   "JTZ"
+
 ColorTbl
   IF NTSC_COL
     .byte   BROWN
@@ -1130,6 +1061,7 @@ ColorTbl
 NUM_COLS    = . - ColorTbl  ; 13
 
 LumTbl
+  IF 0
 ;    .byte   $04
 ;    .byte   $06
 ;    .byte   $08
@@ -1139,8 +1071,8 @@ LumTbl
 ;    .byte   $06
 ;    .byte   $04
 ;    .byte   $02
-
-    .byte   $00|1   ; avoid $00 by adding 1
+  ENDIF
+  IF 1
     .byte   $00|1
     .byte   $02
     .byte   $04
@@ -1149,6 +1081,17 @@ LumTbl
     .byte   $0a
     .byte   $0c
     .byte   $0e
+    .byte   $0e;0|1   ; avoid $00 by adding 1
+  ENDIF
+
+    .byte     " ColorMatch "
+    VERSION_STR
+  IF NTSC_COL
+    .byte   " (NTSC)"
+  ELSE
+    .byte   " (PAL-60)"
+  ENDIF
+    .byte     " - (C) 2024 Thomas Jentzsch "
 
   IF F8SC
     ORG_FREE_LBL $fff0, "BS"
