@@ -7,12 +7,21 @@
 ;   - random row order
 ;   - random column order
 ;   - random cells
+; - game play:
+;   ? remove found cells, either block or fall into
+;   ? swap found cells
+; - timer, bonus when found fast
+;   - either time per block (getting less)
+;   - or total time
+; - better randomization
+; - reset switch
+
 
 ;===============================================================================
 ; A S S E M B L E R - S W I T C H E S
 ;===============================================================================
 
-VERSION         = $0001
+VERSION         = $0002
 BASE_ADR        = $f000
 
   IFNCONST TV_MODE ; manually defined here
@@ -25,6 +34,12 @@ F8SC            = 1     ; create F8SC instead of 4KSC (for Harmony)
 
 ILLEGAL         = 1
 DEBUG           = 1
+
+
+REMOVE_CELLS    = 0
+BLOCK_CELLS     = 0     ; TODO
+SWAP_CELLS      = 1
+
 
 SAVEKEY         = 0 ; (-~220) support high scores on SaveKey
 PLUSROM         = 0 ; (-~50)
@@ -47,6 +62,8 @@ PLUSROM         = 0 ; (-~50)
 
 ; TODO
 
+EMPTY_COL       = BLACK|$1
+
 
 ;===============================================================================
 ; G A M E - C O N S T A N T S
@@ -56,7 +73,7 @@ EOR_RND_LO      = $bd           ; %10110100 ($9c, $b4, $bd, $ca, $eb, $fc)
 
 NUM_ROWS        = 9
 NUM_COLS        = 13
-NUM_CELLS       = NUM_ROWS * NUM_COLS
+NUM_CELLS       = NUM_ROWS * NUM_COLS ; = 117
 
 MOVE_SPEED      = $20
 
@@ -174,6 +191,9 @@ Col12
     sta     COLUPF              ; 3                 #11w
     dey                         ; 2
     stx     COLUPF              ; 3 = 25    @72!    #12w
+; 13 blocks: 45 cycles               (9 * 3 + 8 * 2 = 43) (could be:  9 * 3 + 7 * 2 = 41)
+;                                                         (1 sprite: 10 * 3 + 8 * 2 = 46)
+; 11 blocks: 45-(12/3)*2 = 37 cycles (7 * 3 + 6 * 2 = 31) (could be:  7 * 3 + 5 * 2 = 29)
 .enterKernel
     sta     WSYNC               ; 3
 ;---------------------------------------
@@ -185,6 +205,13 @@ EnterKernel = RAMKernel + .enterKernel - KernelCode
 PD = KernelCode - RAMKernel     ; patch delta
   ENDM
 
+; Ideas:
+; x 1. use PS as 4th register for color setting: bits 4+5 always 1!
+; x 2. use missile for 2nd color: saves one sprite, but requires 2*5 extra cycles, leaving just 6
+; x 3. use PS as loop counter: PLA could be used for sprite, Y for preloading
+; ? 2.+3. might work
+
+
 
 ;===============================================================================
 ; R O M - C O D E
@@ -194,7 +221,7 @@ PD = KernelCode - RAMKernel     ; patch delta
 
     NEXT_PASS
 
-    ds      256, $55
+    ds      256, $ff
 
 ;---------------------------------------------------------------
 DrawScreen SUBROUTINE
@@ -430,6 +457,12 @@ VerticalBlank SUBROUTINE
   ENDIF
     sta     TIM64T
 
+    lda     SWCHB
+    lsr
+    bcs     .skipReset
+    jmp     Start
+
+.skipReset
 .tmpSwchA   = tmpVars
 
 TIM_S
@@ -783,37 +816,103 @@ OverScan SUBROUTINE
 ; check for color match:
     bit     SWCHB
     bpl     .coarseCheck
+    ldx     #NUM_CELLS/2
     lda     colorLst_R+NUM_CELLS/2
     cmp     targetCol
     bne     .skipNewCol
     beq     .foundTargetCol
 
 .coarseCheck
-    ldy     #INDEX_LEN-1
-.loopCheck
-    ldx     IndexTbl,y
-    lda     colorLst_R,x
-    cmp     targetCol
-;    beq     .foundTargetCol
-    bne     .nextIndex
+; check if any cell nearby is close (delta hue OR (todo) delta val <= 2)
+;.tmpDiff    = tmpVars
+MAX_VAL_DIFF    = $02
+
+; compare hue:
+.checkHue
+    lda     targetCol
+    lsr
+    lsr
+    lsr
+    lsr
+    tay
+    lda     colorLst_R+NUM_CELLS/2
+    lsr
+    lsr
+    lsr
+    lsr
+    cmp     PrevHueTbl,y
+    beq     .checkSameValue
+    cmp     NextHueTbl,y
+    beq     .checkSameValue
+    lda     targetCol                   ; same hue?
+    eor     colorLst_R+NUM_CELLS/2
+    and     #$f0
+    beq     .checkRangeValue            ;  yes, check value +/-2
+    bne     .skipNewCol                 ;  no, no match
+
+; compare value:
+.checkRangeValue    ; hue is the same
+    lda     targetCol
+    sec
     sbc     colorLst_R+NUM_CELLS/2
+    clc
+    adc     #MAX_VAL_DIFF
+    cmp     #MAX_VAL_DIFF*2+1
+    bcs     .skipNewCol                 ;  no, no match
+    bcc     .foundTargetCol             ;  yes, match!
+
+.checkSameValue
+    lda     targetCol
+    eor     colorLst_R+NUM_CELLS/2
     and     #$0f
-    cmp     #$02+1
-    bcc     .foundTargetCol
-    cmp     #$0e
-    bcs     .foundTargetCol
-.nextIndex
-    dey
-    bpl     .loopCheck
-    bmi     .skipNewCol
+    bne     .skipNewCol                 ;  no, no match
+;    beq     .foundTargetCol
+
+;    ldy     #INDEX_LEN-1
+;.loopCheck
+;    ldx     IndexTbl,y
+;    lda     colorLst_R,x
+;    cmp     targetCol
+;;    beq     .foundTargetCol
+;    bne     .nextIndex
+;    sbc     colorLst_R+NUM_CELLS/2
+;    and     #$0f
+;    cmp     #$02+1
+;    bcc     .foundTargetCol
+;    cmp     #$0e
+;    bcs     .foundTargetCol
+;.nextIndex
+;    dey
+;    bpl     .loopCheck
+;    bmi     .skipNewCol
 
 .foundTargetCol
+  IF REMOVE_CELLS
+    lda     #EMPTY_COL
+    sta     colorLst_W+NUM_CELLS/2
+  ENDIF
+  IF SWAP_CELLS
+    jsr     GetRandomCellIdx
+    lda     colorLst_R+NUM_CELLS/2
+    pha
+    lda     colorLst_R,x
+    sta     colorLst_W+NUM_CELLS/2
+    pla
+    sta     colorLst_W,x
+  ENDIF
+
+    ldy     #2
+.loopRandom
     jsr     NextRandom
     and     #$7f
     cmp     #NUM_CELLS
     bcc     .colOk
+    dey
+    bne     .loopRandom
     lsr
 .colOk
+    cmp     #NUM_CELLS/2            ; skip current cell
+    beq     .loopRandom
     tay
     lda     colorLst_R,y
     sta     targetCol
@@ -838,6 +937,23 @@ OverScan SUBROUTINE
     bne     .waitTim
     rts
 ; /OverScan
+
+;---------------------------------------------------------------
+GetRandomCellIdx SUBROUTINE
+;---------------------------------------------------------------
+    ldx     #INDEX_LEN-1
+.loopRandom
+    jsr     NextRandom
+    and     #$7f
+    cmp     #NUM_CELLS
+    bcc     .cellOk
+    lsr
+.cellOk
+    cmp     IndexTbl,y
+    beq     .loopRandom
+    dex
+    bne     .loopRandom
+    rts
 
 IndexTbl
     .byte   NUM_CELLS/2-NUM_COLS
@@ -1026,39 +1142,101 @@ _IDX    SET _IDX + 1
 
     .byte   "JTZ"
 
-ColorTbl
   IF NTSC_COL
-    .byte   BROWN
-    .byte   ORANGE
-    .byte   RED
-    .byte   MAUVE
-    .byte   VIOLET
-    .byte   PURPLE
-    .byte   BLUE
-    .byte   BLUE_CYAN
-    .byte   CYAN
-    .byte   CYAN_GREEN
-;    .byte   GREEN
-    .byte   GREEN_YELLOW
-    .byte   GREEN_BEIGE
-;    .byte   BEIGE
-    .byte   YELLOW
-  ELSE
-    .byte   YELLOW
-    .byte   ORANGE
-    .byte   RED
-    .byte   MAUVE
-    .byte   VIOLET
-    .byte   PURPLE
-    .byte   BLUE
-    .byte   BLUE_CYAN
-    .byte   CYAN
-    .byte   CYAN_GREEN
-    .byte   GREEN
-    .byte   GREEN_YELLOW
-    .byte   BLACK
-  ENDIF
+ColorTbl
+    .byte   BROWN           ; $20
+    .byte   ORANGE          ; $30
+    .byte   RED             ; $40
+    .byte   MAUVE           ; $50
+    .byte   VIOLET          ; $60
+    .byte   PURPLE          ; $70
+    .byte   BLUE            ; $80
+    .byte   BLUE_CYAN       ; $90
+    .byte   CYAN            ; $a0
+    .byte   CYAN_GREEN      ; $b0
+;    .byte   GREEN           ; $c0
+    .byte   GREEN_YELLOW    ; $d0
+    .byte   GREEN_BEIGE     ; $e0
+;    .byte   BEIGE           ; $f0
+    .byte   YELLOW          ; $10
 NUM_COLS    = . - ColorTbl  ; 13
+
+PrevHueTbl = . - 1
+    .byte   GREEN_BEIGE >>4 ; YELLOW        $10
+    .byte   YELLOW      >>4 ; BROWN         $20
+    .byte   BROWN       >>4 ; ORANGE        $30
+    .byte   ORANGE      >>4 ; RED           $40
+    .byte   RED         >>4 ; MAUVE         $50
+    .byte   MAUVE       >>4 ; VIOLET        $60
+    .byte   VIOLET      >>4 ; PURPLE        $70
+    .byte   PURPLE      >>4 ; BLUE          $80
+    .byte   BLUE        >>4 ; BLUE_CYAN     $90
+    .byte   BLUE_CYAN   >>4 ; CYAN          $a0
+    .byte   CYAN        >>4 ; CYAN_GREEN    $b0
+    .byte   0
+    .byte   CYAN_GREEN  >>4 ; GREEN_YELLOW  $d0
+    .byte   GREEN_YELLOW>>4 ; GREEN_BEIGE   $e0
+NextHueTbl = . - 1
+    .byte   BROWN       >>4 ; YELLOW        $10
+    .byte   ORANGE      >>4 ; BROWN         $20
+    .byte   RED         >>4 ; ORANGE        $30
+    .byte   MAUVE       >>4 ; RED           $40
+    .byte   VIOLET      >>4 ; MAUVE         $50
+    .byte   PURPLE      >>4 ; VIOLET        $60
+    .byte   BLUE        >>4 ; PURPLE        $70
+    .byte   BLUE_CYAN   >>4 ; BLUE          $80
+    .byte   CYAN        >>4 ; BLUE_CYAN     $90
+    .byte   CYAN_GREEN  >>4 ; CYAN          $a0
+    .byte   GREEN_YELLOW>>4 ; CYAN_GREEN    $b0
+    .byte   0
+    .byte   GREEN_BEIGE >>4 ; GREEN_YELLOW  $d0
+    .byte   YELLOW      >>4 ; GREEN_BEIGE   $e0
+  ELSE
+PAL_WHITE   = BLACK+$10     ; $10
+ColorTbl
+    .byte   YELLOW          ; $20
+    .byte   ORANGE          ; $40
+    .byte   RED             ; $60
+    .byte   MAUVE           ; $80
+    .byte   VIOLET          ; $a0
+    .byte   PURPLE          ; $c0
+    .byte   BLUE            ; $d0
+    .byte   BLUE_CYAN       ; $b0
+    .byte   CYAN            ; $90
+    .byte   CYAN_GREEN      ; $70
+    .byte   GREEN           ; $50
+    .byte   GREEN_YELLOW    ; $30
+    .byte   PAL_WHITE       ; $10
+NUM_COLS    = . - ColorTbl  ; 13
+PrevHueTbl = . - 1
+    .byte   GREEN_YELLOW>>4 ; PAL_WHITE     $10
+    .byte   PAL_WHITE   >>4 ; YELLOW        $20
+    .byte   GREEN       >>4 ; GREEN_YELLOW  $30
+    .byte   YELLOW      >>4 ; ORANGE        $40
+    .byte   CYAN_GREEN  >>4 ; GREEN         $50
+    .byte   ORANGE      >>4 ; RED           $60
+    .byte   CYAN        >>4 ; CYAN_GREEN    $70
+    .byte   RED         >>4 ; MAUVE         $80
+    .byte   BLUE_CYAN   >>4 ; CYAN          $90
+    .byte   MAUVE       >>4 ; VIOLET        $a0
+    .byte   BLUE        >>4 ; BLUE_CYAN     $b0
+    .byte   VIOLET      >>4 ; PURPLE        $c0
+    .byte   PURPLE      >>4 ; BLUE          $d0
+NextHueTbl = . - 1
+    .byte   YELLOW      >>4 ; PAL_WHITE     $10
+    .byte   ORANGE      >>4 ; YELLOW        $20
+    .byte   PAL_WHITE   >>4 ; GREEN_YELLOW  $30
+    .byte   RED         >>4 ; ORANGE        $40
+    .byte   GREEN_YELLOW>>4 ; GREEN         $50
+    .byte   MAUVE       >>4 ; RED           $60
+    .byte   GREEN       >>4 ; CYAN_GREEN    $70
+    .byte   VIOLET      >>4 ; MAUVE         $80
+    .byte   CYAN_GREEN  >>4 ; CYAN          $90
+    .byte   PURPLE      >>4 ; VIOLET        $a0
+    .byte   CYAN        >>4 ; BLUE_CYAN     $b0
+    .byte   BLUE        >>4 ; PURPLE        $c0
+    .byte   BLUE_CYAN   >>4 ; BLUE          $d0
+  ENDIF
 
 LumTbl
   IF 0
@@ -1073,7 +1251,7 @@ LumTbl
 ;    .byte   $02
   ENDIF
   IF 1
-    .byte   $00|1
+    .byte   $00
     .byte   $02
     .byte   $04
     .byte   $06
@@ -1081,7 +1259,7 @@ LumTbl
     .byte   $0a
     .byte   $0c
     .byte   $0e
-    .byte   $0e;0|1   ; avoid $00 by adding 1
+    .byte   $0e
   ENDIF
 
     .byte     " ColorMatch "
