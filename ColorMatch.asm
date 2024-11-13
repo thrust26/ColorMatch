@@ -8,20 +8,28 @@
 ;   - random column order
 ;   - random cells
 ; - game play:
-;   ? remove found cells, either block or fall into
-;   ? swap found cells
+;   o remove found cells, either block or fall into
+;   o swap found cells
+;   - swap random cells
+;   - remove random cells (blocking), keep path?
+;   - automatically move whole screen and/or random/specific rows/columns
+; - reduce to 11 columns to get one sprite back
+
+; TODOs:
+; - better randomization
+; o reset switch
 ; - timer, bonus when found fast
 ;   - either time per block (getting less)
 ;   - or total time
-; - better randomization
-; - reset switch
+; o timer bar above or below main kernel?
+; o score position?
 
 
 ;===============================================================================
 ; A S S E M B L E R - S W I T C H E S
 ;===============================================================================
 
-VERSION         = $0002
+VERSION         = $0003
 BASE_ADR        = $f000
 
   IFNCONST TV_MODE ; manually defined here
@@ -36,10 +44,9 @@ ILLEGAL         = 1
 DEBUG           = 1
 
 
-REMOVE_CELLS    = 0
-BLOCK_CELLS     = 0     ; TODO
-SWAP_CELLS      = 1
-
+REMOVE_CELLS    = 1
+BLOCK_CELLS     = 1     ; TODO
+SWAP_CELLS      = 0
 
 SAVEKEY         = 0 ; (-~220) support high scores on SaveKey
 PLUSROM         = 0 ; (-~50)
@@ -62,7 +69,9 @@ PLUSROM         = 0 ; (-~50)
 
 ; TODO
 
-EMPTY_COL       = BLACK|$1
+NO_TIMER_COL    = BLACK|$4
+TIMER_COL       = BLUE_CYAN|$c
+EMPTY_COL       = BLACK;|$1
 
 
 ;===============================================================================
@@ -74,8 +83,16 @@ EOR_RND_LO      = $bd           ; %10110100 ($9c, $b4, $bd, $ca, $eb, $fc)
 NUM_ROWS        = 9
 NUM_COLS        = 13
 NUM_CELLS       = NUM_ROWS * NUM_COLS ; = 117
+CELL_H          = 15-1
 
 MOVE_SPEED      = $20
+
+MAX_TIMER       = 160-8
+TIMER_SPEED     = $20
+BAR_HEIGHT      = 4
+ADD_TIMER       = MAX_TIMER*2/10
+
+NUM_TMPS        = 10
 
 STACK_SIZE      = 4
 
@@ -88,12 +105,16 @@ STACK_SIZE      = 4
     ORG     $80
 
 frameCnt        .byte
-tmpVars         ds 10
+tmpVars         ds NUM_TMPS
 randomLo        .byte
 randomHi        .byte
 targetCol       .byte
 moveSum         .byte
 sound           .byte
+
+timerLst        ds 2
+timerLo         = timerLst
+timerHi         = timerLst+1
 
 RAMKernel       ds KernelCodeEnd - KernelCode ; (48 bytes reserved for RAM kernel)
 
@@ -151,6 +172,35 @@ DEBUG_BYTES SET DEBUG_BYTES + 1
 ;    .byte   $2c
 ;  ENDM
 
+  MAC START_TMP
+   LIST OFF
+; use default variable:
+_ARGS SET {0}
+   IF _ARGS = ""
+_TMP_ORG SET tmpVars
+   ELSE
+_TMP_ORG SET _ARGS
+   ENDIF
+
+_END_TMP SET _TMP_ORG
+  LIST ON
+    SEG.U   TempVariables
+    ORG     _TMP_ORG
+  ENDM
+
+  MAC CONT_TMP
+    SEG.U   TempVariables
+    ORG     _END_TMP
+  ENDM
+
+  MAC END_TMP
+_END_TMP SET .
+    IF . > tmpVars + NUM_TMPS
+      ECHO "ERROR: too many tmpVars!", . - tmpVars + NUM_TMPS
+      ERR
+    ENDIF
+    SEG     Bank0
+  ENDM
 
   MAC KERNEL_CODE
 .loopKernel                     ;           @03
@@ -194,6 +244,7 @@ Col12
 ; 13 blocks: 45 cycles               (9 * 3 + 8 * 2 = 43) (could be:  9 * 3 + 7 * 2 = 41)
 ;                                                         (1 sprite: 10 * 3 + 8 * 2 = 46)
 ; 11 blocks: 45-(12/3)*2 = 37 cycles (7 * 3 + 6 * 2 = 31) (could be:  7 * 3 + 5 * 2 = 29)
+;                                    (8 * 3 + 6 * 2 = 36, 1 sprite)
 .enterKernel
     sta     WSYNC               ; 3
 ;---------------------------------------
@@ -204,13 +255,6 @@ KernelCodeEnd
 EnterKernel = RAMKernel + .enterKernel - KernelCode
 PD = KernelCode - RAMKernel     ; patch delta
   ENDM
-
-; Ideas:
-; x 1. use PS as 4th register for color setting: bits 4+5 always 1!
-; x 2. use missile for 2nd color: saves one sprite, but requires 2*5 extra cycles, leaving just 6
-; x 3. use PS as loop counter: PLA could be used for sprite, Y for preloading
-; ? 2.+3. might work
-
 
 
 ;===============================================================================
@@ -226,11 +270,6 @@ PD = KernelCode - RAMKernel     ; patch delta
 ;---------------------------------------------------------------
 DrawScreen SUBROUTINE
 ;---------------------------------------------------------------
-.rowCount   = tmpVars
-;.carry      = tmpVars+1
-.colorPtr   = tmpVars+2
-.tmpColP0   = tmpVars+4
-.tmpColP1   = tmpVars+5
 
 ;    lda     #0
 ;    bit     SWCHB
@@ -240,7 +279,7 @@ DrawScreen SUBROUTINE
 ;.noFlicker
 ;    sta     .carry
 
-    ldx     #227
+    ldx     #227+11
 .waitTim
     lda     INTIM
     bne     .waitTim
@@ -249,27 +288,162 @@ DrawScreen SUBROUTINE
     sta     VBLANK
     stx     TIM64T              ;  =  7
 
-    lda     #<colorLst_R + NUM_COLS * (NUM_ROWS - 1)
-    sta     .colorPtr
-    lda     #>colorLst_R
-    sta     .colorPtr+1         ;  = 10
+; *** Draw energy bar ***
+    ldx     #%000
+    stx     NUSIZ1
+    lda     #%100001            ; 2         quad size ball, reflected PF
+    sta     CTRLPF              ; 3
+    lda     #$70                ; 2         -7
+    sta     HMP1                ; 3
+    stx     GRP1                ; 3
+    stx     COLUP1
+    lda     timerHi             ; 3
+    clc
+    adc     #6                  ; 2
+    sta     WSYNC               ; 3 = 32
+;---------------------------------------
+    sta     RESP1               ; 3         prepare border sprite for energy bar
+    stx     GRP1                ; 3         clear P0 & P1
+WaitBar
+    sbc     #$0f                ; 2
+    bcs     WaitBar             ; 2/3
+    CHECKPAGE WaitBar
 
-    lda     #%01100000
-    sta     PF0
-    lda     #%11011011
-    sta     PF1
-    asl                         ;           #%10110110
-    sta     PF2                 ;  = 15
-;    lda     #%10010010
-;    sta     PF0
-;    lsr                         ;           #%01001001
-;    sta     PF2
-;    lsr                         ;           #%00100100
-;    sta     PF1                 ;  = 15
+    tay                         ; 2
+    lda     HmTbl,y             ; 4
+    sta     HMBL                ; 3
+    sta.w   RESBL               ; 4         @23..73!
+    sta     WSYNC
+;---------------------------------------
+    sta     HMOVE               ; 3
+    stx     COLUP1              ; 2 =  5    X = 0
 
-    ldy     #NUM_ROWS-1
-    sty     .rowCount           ;  = 5
-    SLEEP   13
+    START_TMP
+.pf0a   .byte
+.pf1a   .byte
+.pf2a   .byte
+.pf2b   .byte
+.pf1b   .byte
+.pf0b   .byte
+    END_TMP
+
+    lda     timerHi             ; 3
+    lsr                         ; 2
+    lsr                         ; 2
+    tay                         ; 2
+    lda     #$ff                ; 2 = 11
+    sta     GRP1                ; 3
+    cpy     #3                  ; 2
+    bcc     .below3             ; 2/3
+    stx     .pf0a               ; 3         X = 0
+    cpy     #11                 ; 2
+    bcc     .below11            ; 2/3
+    stx     .pf1a               ; 3
+    cpy     #19                 ; 2
+    bcc     .below19            ; 2/3
+    stx     .pf2a               ; 3
+    cpy     #27                 ; 2
+    bcc     .below27            ; 2/3
+    stx     .pf2b               ; 3
+    cpy     #35                 ; 2
+    bcc     .below35            ; 2/3
+    stx     .pf1b               ; 3
+    lda     TimerF-35,y         ; 4
+    bcs     .setPF0b            ; 3 = 56
+
+.below11                        ;   @23
+    ldx     TimerF-3,y          ; 4
+    stx     .pf1a               ; 3
+    bcc     .setPF2a            ; 3
+
+.below19
+    ldx     TimerR-11,y         ; 4
+    stx     .pf2a
+    bcc     .setPF2b
+
+.below27
+    ldx     TimerF-19,y         ; 4
+    stx     .pf2b
+    bcc     .setPF1b
+
+.below35
+    ldx     TimerR-27,y         ; 4
+    stx     .pf1b               ; 3
+    bcc     .setPF0b            ; 3
+
+.below3
+    ldx     TimerR+5,y          ; 4
+    stx     .pf0a
+    sta     .pf1a
+.setPF2a
+    sta     .pf2a
+.setPF2b
+    sta     .pf2b
+.setPF1b
+    sta     .pf1b
+.setPF0b
+    tay                         ; 2 =  2    @..65
+
+    lda     #NO_TIMER_COL
+    sta     COLUPF              ; 3
+    ldx     #BAR_HEIGHT
+.loopBar
+    sta     WSYNC               ; 3 =  9
+;---------------------------------------
+    nop                         ; 2
+    lda     #TIMER_COL          ; 2
+    sta.w   COLUBK              ; 4
+    lda     #%10                ; 2
+    sta     ENABL               ; 3 = 13
+
+    lda     .pf0a               ; 3
+    sta     PF0                 ; 3         @19
+    lda     .pf1a               ; 3
+    sta     PF1                 ; 3         @24
+    lda     .pf2a               ; 3
+    sta     PF2                 ; 3 = 18    @31
+
+    sty     PF0                 ; 3 =  3    @34
+
+    lda     .pf1b               ; 3
+    sta     PF1                 ; 3 =  6    @40
+
+    lda     .pf2b               ; 3
+    dex                         ; 2
+    sta     PF2                 ; 3 =  8    @48
+    bne     .loopBar            ; 3/2
+; 26 free cycles
+    sta     WSYNC               ; 3
+;---------------------------------------
+    START_TMP
+.rowCount   .byte
+.colorPtr   ds 2
+.tmpColP0   .byte
+.tmpColP1   .byte
+    END_TMP
+
+    stx     COLUBK              ; 3
+    stx     COLUPF              ; 3
+    stx     ENABL               ; 3
+    stx     GRP1                ; 3
+    lda     #%111               ; 2
+    sta     NUSIZ0              ; 3
+    sta     NUSIZ1              ; 3
+    ldy     #NUM_ROWS-1         ; 2
+    sty     .rowCount           ; 3 = 25
+    lda     #%01100000          ; 2
+    sta     PF0                 ; 3
+    lda     #%11011011          ; 2
+    sta     PF1                 ; 3
+    asl                         ; 2         #%10110110
+    SLEEP   2                   ; 2
+    sta     RESP0               ; 3 = 17    @42
+    sta     PF2                 ; 3
+    lda     #<colorLst_R + NUM_COLS * (NUM_ROWS - 1); 2
+    sta     .colorPtr           ; 3
+    lda     #>colorLst_R        ; 2
+    sta     .colorPtr+1         ; 3
+    sta     RESP1               ; 3 = 16    @58
 ;---------------------------------------------------------------
 .loopRows                       ;           @50/51
     clc                         ; 2
@@ -277,7 +451,6 @@ DrawScreen SUBROUTINE
 .loopPatch
     lda     (.colorPtr),y       ; 5
     ldx     PatchTbl,y          ; 4
-;    adc     .carry              ; 3         flicker two colors together
     sta     $00,x               ; 4
     dey                         ; 2
     bpl     .loopPatch          ; 3/2=21/20
@@ -288,17 +461,21 @@ DrawScreen SUBROUTINE
     sbc     #NUM_COLS-1
     sta     .colorPtr
 
-    ldy     #15
+    lda     .tmpColP1
+    ldx     #8
+WaitGap
+    dex
+    bne     WaitGap             ;   = 41
+    CHECKPAGE   WaitGap
+    ldy     #CELL_H
+    sta.w   COLUP1
+    lda     .tmpColP0
+    sta     COLUP0
     lda     #%11000000
-    SLEEP   11+NUM_COLS*3
-    ldx     .tmpColP1
-    stx     COLUP1
-    ldx     .tmpColP0
-    stx     COLUP0
     sta     GRP0
-    sta     GRP1
-    jsr     EnterKernel             ; @08
-    sty     COLUPF                  ; Y = 0
+    sta     GRP1                ;           @65
+    jsr     EnterKernel         ;           @08
+    sty     COLUPF              ;           Y = 0
     sty     GRP1
     lda     targetCol
     sta     COLUP0
@@ -314,16 +491,17 @@ DrawScreen SUBROUTINE
 .skipCursor
     sty     GRP0
     stx     PF2
+    SLEEP   8
     dec     .rowCount
     bpl     .loopRows
     sta     WSYNC
 ;---------------------------------------------------------------
-;    ldy     #0
-;    sty     PF0
-;    sty     PF1
-;    sty     PF2
-;    sty     GRP0
-;    sty     GRP1
+    ldy     #0
+    sty     PF0
+    sty     PF1
+    sty     PF2
+    sty     GRP0
+    sty     GRP1
 
     ldx     #2
 .waitScreen
@@ -393,21 +571,10 @@ GameInit SUBROUTINE
     lda     INTIM
     sta     randomLo
 
-    lda     #64-1
-    ldx     #0
-    jsr     SetXPos
-    lda     #112-1
-    inx
-    jsr     SetXPos
-    sta     WSYNC
-;---------------------------------------
-    sta     HMOVE
-
-    lda     #%111
-    sta     NUSIZ0
-    sta     NUSIZ1
-    lda     #%1
-    sta     CTRLPF
+    lda     #MAX_TIMER
+    sta     timerHi
+    lda     #255
+    sta     timerLo
 
 SetupColors
 .colorPtrR  = tmpVars
@@ -433,7 +600,8 @@ SetupColors
     bpl     .loopRows
 ; 2291 cycles = ~30.2 scanlines
 
-    lda     colorLst_R+NUM_CELLS/2
+;    lda     colorLst_R+NUM_CELLS/2
+    jsr     GetRandomCellIdx
     sta     targetCol
     rts
 ; /GameInit
@@ -451,7 +619,7 @@ VerticalBlank SUBROUTINE
     inc     frameCnt
 
   IF NTSC_TIM
-    lda     #44
+    lda     #44-4           ; 38*64 = 2432
   ELSE
     lda     #77
   ENDIF
@@ -483,7 +651,7 @@ TIM_S
     cpx     #$ff
     lda     moveSum
     bcc     .dirPressed
-    lda     #MOVE_SPEED-1
+    lda     #MOVE_SPEED-1       ; reset move delay
 .dirPressed
     sbc     #MOVE_SPEED-1
     sta     moveSum
@@ -500,6 +668,10 @@ TIM_S
     asl
     bpl     .upR
 ; shift colors right:
+  IF BLOCK_CELLS
+    lda     colorLst_R+NUM_CELLS/2-1
+    beq     .skipDirsJmp
+  ENDIF
     ldy     #NUM_CELLS
 .loopRowsR
     lda     colorLst_R-1,y
@@ -525,6 +697,10 @@ TIM_R
 ;---------------------------------------------------------------
 .downR
 ; move cells down right:
+  IF BLOCK_CELLS
+    lda     colorLst_R+NUM_CELLS/2+NUM_COLS-1
+    beq     .skipDirsJmp
+  ENDIF
     jsr     SaveRightColumn
     ldy     #NUM_COLS-2
 .loopColsDR
@@ -549,11 +725,15 @@ TIM_R
     ldy     #NUM_CELLS-NUM_COLS*2
 TIM_DR
 ; 1913 cycles
-    jmp     .loadColumnDown
+    jmp     .loadColumnDown             ;175
 
 ;---------------------------------------------------------------
 .upR
 ; move cells up right:
+  IF BLOCK_CELLS
+    lda     colorLst_R+NUM_CELLS/2-NUM_COLS-1
+    beq     .skipDirsJmp
+  ENDIF
     jsr     SaveRightColumn
     ldy     #NUM_CELLS-NUM_COLS-2
 .loopColsUR
@@ -593,6 +773,10 @@ TIM_UR
     asl
     bpl     .upL
 ; move cells left:
+  IF BLOCK_CELLS
+    lda     colorLst_R+NUM_CELLS/2+1
+    beq     .skipDirsJmp
+  ENDIF
     ldy     #0
 .loopRowsL
     lda     colorLst_R,y
@@ -615,6 +799,10 @@ TIM_L
 
 .downL
 ; move cells down left:
+  IF BLOCK_CELLS
+    lda     colorLst_R+NUM_CELLS/2+NUM_COLS+1
+    beq     .skipDirsJmp2
+  ENDIF
     jsr     SaveLeftColumn
     ldy     #0
     clc
@@ -663,6 +851,10 @@ TIM_LD
 ;---------------------------------------------------------------
 .upL
 ; move cells up left:
+  IF BLOCK_CELLS
+    lda     colorLst_R+NUM_CELLS/2-NUM_COLS+1
+    beq     .skipDirsJmp2
+  ENDIF
     jsr     SaveLeftColumn
     ldy     #NUM_CELLS-NUM_COLS*2+1
 .loopColsUL
@@ -691,20 +883,20 @@ TIM_UL
     nop
 TIM_SLU
 .loadColumnUp
-    ldx     #NUM_ROWS-2
-    sec
+    ldx     #NUM_ROWS-2             ; 2         = 7
+    sec                             ; 2 =  4
 .loopLoadUp
-    lda     colorBuf_R,x
-    sta     colorLst_W,y
-    tya
-    sbc     #NUM_COLS
-    tay
-    dex
-    bpl     .loopLoadUp
-    lda     colorBuf_R+NUM_ROWS-1   ; saved top cell
-    sta     colorLst_W,y            ; ...to bottom cell
+    lda     colorBuf_R,x            ; 4
+    sta     colorLst_W,y            ; 5
+    tya                             ; 2
+    sbc     #NUM_COLS               ; 2
+    tay                             ; 2
+    dex                             ; 2
+    bpl     .loopLoadUp             ; 3 = 20/19
+    lda     colorBuf_R+NUM_ROWS-1   ; 4         saved top cell
+    sta     colorLst_W,y            ; 5         ...to bottom cell
 TIM_LU
-; 172 cycles
+; 172 cycles (1x unrolling saves 42 cycles)
     bcs     .skipDirs
     DEBUG_BRK
 
@@ -714,6 +906,10 @@ TIM_LU
     asl
     bmi     .skipDown
 ; move cells down:
+  IF BLOCK_CELLS
+    lda     colorLst_R+NUM_CELLS/2+NUM_COLS
+    beq     .skipDirs
+  ENDIF
     ldy     #NUM_COLS-1
 .loopColsD
     clc
@@ -746,6 +942,10 @@ TIM_D
     asl
     bmi     .skipUp
 ; move cells up:
+  IF BLOCK_CELLS
+    lda     colorLst_R+NUM_CELLS/2-NUM_COLS
+    beq     .skipDirs
+  ENDIF
     ldy     #NUM_CELLS-1
     sec
 .loopColsU
@@ -781,7 +981,7 @@ TIM_U
     jsr     SetupColors
 .skipResetColors
     rts
-; GameCalc
+; /VerticalBlank
 
 ;---------------------------------------------------------------
 SaveRightColumn SUBROUTINE
@@ -790,7 +990,6 @@ SaveRightColumn SUBROUTINE
     NOP_W
 SaveLeftColumn
     ldy     #NUM_CELLS-NUM_COLS
-;SaveColumn
     ldx     #NUM_ROWS-1
     sec
 .loopSave
@@ -807,11 +1006,21 @@ SaveLeftColumn
 OverScan SUBROUTINE
 ;---------------------------------------------------------------
   IF NTSC_TIM
-    lda     #36
+    lda     #36-7
   ELSE
     lda     #63
   ENDIF
     sta     TIM64T
+
+    lda     timerLo
+    sec
+    sbc     #TIMER_SPEED
+    sta     timerLo
+    bcs     .skipTimerHi
+    lda     timerHi
+    beq     .skipTimerHi
+    dec     timerHi
+.skipTimerHi
 
 ; check for color match:
     bit     SWCHB
@@ -890,31 +1099,16 @@ MAX_VAL_DIFF    = $02
   IF REMOVE_CELLS
     lda     #EMPTY_COL
     sta     colorLst_W+NUM_CELLS/2
+    jsr     GetRandomCellIdx
   ENDIF
   IF SWAP_CELLS
     jsr     GetRandomCellIdx
-    lda     colorLst_R+NUM_CELLS/2
     pha
-    lda     colorLst_R,x
-    sta     colorLst_W+NUM_CELLS/2
-    pla
+    lda     colorLst_R+NUM_CELLS/2
     sta     colorLst_W,x
+    pla
+    sta     colorLst_W+NUM_CELLS/2
   ENDIF
-
-    ldy     #2
-.loopRandom
-    jsr     NextRandom
-    and     #$7f
-    cmp     #NUM_CELLS
-    bcc     .colOk
-    dey
-    bne     .loopRandom
-    lsr
-.colOk
-    cmp     #NUM_CELLS/2            ; skip current cell
-    beq     .loopRandom
-    tay
-    lda     colorLst_R,y
     sta     targetCol
     lda     #DECAY_LEN
     sta     sound
@@ -922,6 +1116,16 @@ MAX_VAL_DIFF    = $02
     sta     AUDC0
     lda     #$0e
     sta     AUDF0
+
+    lda     timerHi
+    clc
+    adc     #ADD_TIMER
+    cmp     #MAX_TIMER
+    bcc     .setTimerHi
+    lda     #MAX_TIMER
+.setTimerHi
+    sta     timerHi
+
 .skipNewCol
 
 ; continue sound:
@@ -941,6 +1145,9 @@ MAX_VAL_DIFF    = $02
 ;---------------------------------------------------------------
 GetRandomCellIdx SUBROUTINE
 ;---------------------------------------------------------------
+; uses:    A, X
+; returns: A = color, X = index
+.repeatRandom
     ldx     #INDEX_LEN-1
 .loopRandom
     jsr     NextRandom
@@ -949,18 +1156,26 @@ GetRandomCellIdx SUBROUTINE
     bcc     .cellOk
     lsr
 .cellOk
-    cmp     IndexTbl,y
+    cmp     IndexTbl,x
     beq     .loopRandom
     dex
     bne     .loopRandom
+    tax
+    lda     colorLst_R,x
+    cmp     #EMPTY_COL
+    beq     .repeatRandom
     rts
 
 IndexTbl
+    .byte   NUM_CELLS/2-NUM_COLS-1
     .byte   NUM_CELLS/2-NUM_COLS
+    .byte   NUM_CELLS/2-NUM_COLS+1
     .byte   NUM_CELLS/2-1
     .byte   NUM_CELLS/2
     .byte   NUM_CELLS/2+1
+    .byte   NUM_CELLS/2+NUM_COLS-1
     .byte   NUM_CELLS/2+NUM_COLS
+    .byte   NUM_CELLS/2+NUM_COLS+1
 INDEX_LEN = . - IndexTbl
 
 VolumeTbl
@@ -1144,8 +1359,25 @@ _IDX    SET _IDX + 1
 
   IF NTSC_COL
 ColorTbl
+;    .byte   BROWN           ; $20
+;    .byte   ORANGE          ; $30
+;    .byte   RED             ; $40
+;    .byte   MAUVE           ; $50
+;    .byte   VIOLET          ; $60
+;    .byte   PURPLE          ; $70
+;    .byte   BLUE            ; $80
+;    .byte   BLUE_CYAN       ; $90
+;    .byte   CYAN            ; $a0
+;    .byte   CYAN_GREEN      ; $b0
+;;    .byte   GREEN           ; $c0
+;    .byte   GREEN_YELLOW    ; $d0
+;    .byte   GREEN_BEIGE     ; $e0
+;;    .byte   BEIGE           ; $f0
+;    .byte   YELLOW          ; $10
+
+    .byte   YELLOW          ; $10
     .byte   BROWN           ; $20
-    .byte   ORANGE          ; $30
+;    .byte   ORANGE          ; $30
     .byte   RED             ; $40
     .byte   MAUVE           ; $50
     .byte   VIOLET          ; $60
@@ -1154,18 +1386,20 @@ ColorTbl
     .byte   BLUE_CYAN       ; $90
     .byte   CYAN            ; $a0
     .byte   CYAN_GREEN      ; $b0
-;    .byte   GREEN           ; $c0
+    .byte   GREEN           ; $c0
     .byte   GREEN_YELLOW    ; $d0
     .byte   GREEN_BEIGE     ; $e0
 ;    .byte   BEIGE           ; $f0
-    .byte   YELLOW          ; $10
+;    .byte   YELLOW          ; $10
 NUM_COLS    = . - ColorTbl  ; 13
 
 PrevHueTbl = . - 1
     .byte   GREEN_BEIGE >>4 ; YELLOW        $10
     .byte   YELLOW      >>4 ; BROWN         $20
-    .byte   BROWN       >>4 ; ORANGE        $30
-    .byte   ORANGE      >>4 ; RED           $40
+;    .byte   BROWN       >>4 ; ORANGE        $30
+;    .byte   ORANGE      >>4 ; RED           $40
+    .byte   0
+    .byte   BROWN       >>4 ; RED           $40
     .byte   RED         >>4 ; MAUVE         $50
     .byte   MAUVE       >>4 ; VIOLET        $60
     .byte   VIOLET      >>4 ; PURPLE        $70
@@ -1173,13 +1407,18 @@ PrevHueTbl = . - 1
     .byte   BLUE        >>4 ; BLUE_CYAN     $90
     .byte   BLUE_CYAN   >>4 ; CYAN          $a0
     .byte   CYAN        >>4 ; CYAN_GREEN    $b0
-    .byte   0
-    .byte   CYAN_GREEN  >>4 ; GREEN_YELLOW  $d0
+;    .byte   0
+;    .byte   CYAN_GREEN  >>4 ; GREEN_YELLOW  $d0
+    .byte   CYAN_GREEN  >>4 ; GREEN         $c0
+    .byte   GREEN       >>4 ; GREEN_YELLOW  $d0
+
     .byte   GREEN_YELLOW>>4 ; GREEN_BEIGE   $e0
 NextHueTbl = . - 1
     .byte   BROWN       >>4 ; YELLOW        $10
-    .byte   ORANGE      >>4 ; BROWN         $20
-    .byte   RED         >>4 ; ORANGE        $30
+;    .byte   ORANGE      >>4 ; BROWN         $20
+;    .byte   RED         >>4 ; ORANGE        $30
+    .byte   RED         >>4 ; BROWN         $20
+    .byte   0
     .byte   MAUVE       >>4 ; RED           $40
     .byte   VIOLET      >>4 ; MAUVE         $50
     .byte   PURPLE      >>4 ; VIOLET        $60
@@ -1187,8 +1426,8 @@ NextHueTbl = . - 1
     .byte   BLUE_CYAN   >>4 ; BLUE          $80
     .byte   CYAN        >>4 ; BLUE_CYAN     $90
     .byte   CYAN_GREEN  >>4 ; CYAN          $a0
-    .byte   GREEN_YELLOW>>4 ; CYAN_GREEN    $b0
-    .byte   0
+    .byte   GREEN       >>4 ; CYAN_GREEN    $b0
+    .byte   GREEN_YELLOW>>4 ; GREEN         $c0
     .byte   GREEN_BEIGE >>4 ; GREEN_YELLOW  $d0
     .byte   YELLOW      >>4 ; GREEN_BEIGE   $e0
   ELSE
@@ -1261,6 +1500,33 @@ LumTbl
     .byte   $0e
     .byte   $0e
   ENDIF
+
+TimerR
+    .byte   %11111110
+    .byte   %11111100
+    .byte   %11111000
+    .byte   %11110000
+    .byte   %11100000
+    .byte   %11000000
+    .byte   %10000000
+    .byte   %00000000
+TimerF
+    .byte   %01111111
+    .byte   %00111111
+    .byte   %00011111
+    .byte   %00001111
+    .byte   %00000111
+    .byte   %00000011
+    .byte   %00000001
+    .byte   %00000000
+
+; position table at very end of page:
+    ORG_FREE_LBL . & ~$ff | ($100-16), "HmTbl"
+HmPTbl
+    .byte   $70
+HmTbl = . - $f1
+    .byte   $60, $50, $40, $30, $20, $10, $00
+    .byte   $f0, $e0, $d0, $c0, $b0, $a0, $90, $80
 
     .byte     " ColorMatch "
     VERSION_STR
