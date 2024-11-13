@@ -92,7 +92,7 @@ TIMER_SPEED     = $20
 BAR_HEIGHT      = 4
 ADD_TIMER       = MAX_TIMER*2/10
 
-NUM_TMPS        = 10
+NUM_TMPS        = 12
 
 STACK_SIZE      = 4
 
@@ -115,6 +115,10 @@ sound           .byte
 timerLst        ds 2
 timerLo         = timerLst
 timerHi         = timerLst+1
+scoreLst        ds 3
+scoreLo         = scoreLst
+scoreMid        = scoreLst+1
+scoreHi         = scoreLst+2
 
 RAMKernel       ds KernelCodeEnd - KernelCode ; (48 bytes reserved for RAM kernel)
 
@@ -209,7 +213,7 @@ Col0
     sta     COLUPF              ; 3 =  5            #0w
     pla                         ; 4
     pha                         ; 3
-    rol     $3f                 ; 5 = 12            free cycles
+    rol     $3f                 ; 5 = 12            free cycles (3|4 bytes)
 Col3
     ldx     #$00                ; 2                 #3r
 Col1
@@ -448,12 +452,13 @@ WaitBar
 .loopRows                       ;           @50/51
     clc                         ; 2
     ldy     #NUM_COLS-1         ; 2 =  4
-.loopPatch
+LoopPatch
     lda     (.colorPtr),y       ; 5
     ldx     PatchTbl,y          ; 4
     sta     $00,x               ; 4
     dey                         ; 2
-    bpl     .loopPatch          ; 3/2=21/20
+    bpl     LoopPatch           ; 3/2=21/20
+    CHECKPAGE LoopPatch
 ; 4 + (21 - 3) * 13 - 1 = 276 - 39
 
     lda     .colorPtr
@@ -466,7 +471,7 @@ WaitBar
 WaitGap
     dex
     bne     WaitGap             ;   = 41
-    CHECKPAGE   WaitGap
+    CHECKPAGE WaitGap
     ldy     #CELL_H
     sta.w   COLUP1
     lda     .tmpColP0
@@ -494,14 +499,96 @@ WaitGap
     SLEEP   8
     dec     .rowCount
     bpl     .loopRows
+    bmi     .exitKernel
+
+.skipCursorWait
+    nop
+    bne     .skipCursor
+
+.exitKernel
     sta     WSYNC
 ;---------------------------------------------------------------
+    START_TMP
+.ptrLst     ds  12
+.ptr0       = .ptrLst
+.ptr1       = .ptrLst+2
+.ptr2       = .ptrLst+4
+.ptr3       = .ptrLst+6
+.ptr4       = .ptrLst+8
+.ptr5       = .ptrLst+10
+    END_TMP
+
     ldy     #0
     sty     PF0
     sty     PF1
     sty     PF2
     sty     GRP0
     sty     GRP1
+
+    lda     #>DigitGfx
+    sta     .ptr0+1
+    sta     .ptr1+1
+    sta     .ptr2+1
+    sta     .ptr3+1
+    sta     .ptr4+1
+
+    sta.w   RESP0
+    sta     RESP1
+
+    sta     .ptr5+1
+    lda     #%10011
+    sta     HMP1
+    sta     NUSIZ0
+    sta     NUSIZ1
+    sta     VDELP0
+    sta     VDELP1
+
+    lda     #<One
+    sta     .ptr0
+    lda     #<Two
+    sta     .ptr1
+    lda     #<Three
+    sta     .ptr2
+    lda     #<Four
+    sta     .ptr3
+    lda     #<Five
+    sta     .ptr4
+    lda     #<Zero
+    sta     .ptr5
+
+    lda     #$0e
+    sta     COLUP0
+    sta     COLUP1
+
+    ldy     #FONT_H-1
+.loopScore
+    lda     (.ptr0),y       ; 5
+    sta     WSYNC           ; 3 =  8
+;---------------------------------------
+    sta     HMOVE           ; 3
+    sta     GRP0            ; 3
+    lda     (.ptr1),y       ; 5
+    sta     GRP1            ; 3
+    lda     (.ptr2),y       ; 5
+    sta     GRP0            ; 3 = 22
+    lax     (.ptr5),y       ; 5
+    txs                     ; 2
+    lax     (.ptr3),y       ; 5
+    lda     (.ptr4),y       ; 5
+    stx     GRP1            ; 3 = 20
+    sta     GRP0            ; 3
+    tsx                     ; 2
+    stx     GRP1            ; 3
+    sta     GRP0            ; 3
+    sta     HMCLR           ; 3
+    dey                     ; 2
+    bpl     .loopScore      ; 3/2=19
+    iny
+    sty     GRP0
+    sty     GRP1
+    sty     GRP0
+    sty     VDELP0
+    sty     VDELP1
 
     ldx     #2
 .waitScreen
@@ -510,15 +597,15 @@ WaitGap
     sta     WSYNC
 ;---------------------------------------
     stx     VBLANK
+    ldx     #$fd
+    txs
     rts
-
-.skipCursorWait
-    nop
-    bne     .skipCursor
 ; /DrawScreen
 
 KernelCode ; patched into
     KERNEL_CODE
+
+    ALIGN   256
 
 PatchTbl
     .byte   Col0 + 1 - PD
@@ -600,7 +687,6 @@ SetupColors
     bpl     .loopRows
 ; 2291 cycles = ~30.2 scanlines
 
-;    lda     colorLst_R+NUM_CELLS/2
     jsr     GetRandomCellIdx
     sta     targetCol
     rts
@@ -669,7 +755,7 @@ TIM_S
     bpl     .upR
 ; shift colors right:
   IF BLOCK_CELLS
-    lda     colorLst_R+NUM_CELLS/2-1
+    lda     colorLst_R+NUM_CELLS/2-1    ;           EMPTY_COL?
     beq     .skipDirsJmp
   ENDIF
     ldy     #NUM_CELLS
@@ -698,7 +784,7 @@ TIM_R
 .downR
 ; move cells down right:
   IF BLOCK_CELLS
-    lda     colorLst_R+NUM_CELLS/2+NUM_COLS-1
+    lda     colorLst_R+NUM_CELLS/2+NUM_COLS-1   ;   EMPTY_COL?
     beq     .skipDirsJmp
   ENDIF
     jsr     SaveRightColumn
@@ -731,7 +817,7 @@ TIM_DR
 .upR
 ; move cells up right:
   IF BLOCK_CELLS
-    lda     colorLst_R+NUM_CELLS/2-NUM_COLS-1
+    lda     colorLst_R+NUM_CELLS/2-NUM_COLS-1   ;   EMPTY_COL?
     beq     .skipDirsJmp
   ENDIF
     jsr     SaveRightColumn
@@ -774,7 +860,7 @@ TIM_UR
     bpl     .upL
 ; move cells left:
   IF BLOCK_CELLS
-    lda     colorLst_R+NUM_CELLS/2+1
+    lda     colorLst_R+NUM_CELLS/2+1    ;           EMPTY_COL?
     beq     .skipDirsJmp
   ENDIF
     ldy     #0
@@ -800,7 +886,7 @@ TIM_L
 .downL
 ; move cells down left:
   IF BLOCK_CELLS
-    lda     colorLst_R+NUM_CELLS/2+NUM_COLS+1
+    lda     colorLst_R+NUM_CELLS/2+NUM_COLS+1   ;   EMPTY_COL?
     beq     .skipDirsJmp2
   ENDIF
     jsr     SaveLeftColumn
@@ -852,7 +938,7 @@ TIM_LD
 .upL
 ; move cells up left:
   IF BLOCK_CELLS
-    lda     colorLst_R+NUM_CELLS/2-NUM_COLS+1
+    lda     colorLst_R+NUM_CELLS/2-NUM_COLS+1   ;   EMPTY_COL?
     beq     .skipDirsJmp2
   ENDIF
     jsr     SaveLeftColumn
@@ -907,7 +993,7 @@ TIM_LU
     bmi     .skipDown
 ; move cells down:
   IF BLOCK_CELLS
-    lda     colorLst_R+NUM_CELLS/2+NUM_COLS
+    lda     colorLst_R+NUM_CELLS/2+NUM_COLS     ;   EMPTY_COL?
     beq     .skipDirs
   ENDIF
     ldy     #NUM_COLS-1
@@ -943,7 +1029,7 @@ TIM_D
     bmi     .skipUp
 ; move cells up:
   IF BLOCK_CELLS
-    lda     colorLst_R+NUM_CELLS/2-NUM_COLS
+    lda     colorLst_R+NUM_CELLS/2-NUM_COLS     ;   EMPTY_COL?
     beq     .skipDirs
   ENDIF
     ldy     #NUM_CELLS-1
@@ -1075,26 +1161,6 @@ MAX_VAL_DIFF    = $02
     eor     colorLst_R+NUM_CELLS/2
     and     #$0f
     bne     .skipNewCol                 ;  no, no match
-;    beq     .foundTargetCol
-
-;    ldy     #INDEX_LEN-1
-;.loopCheck
-;    ldx     IndexTbl,y
-;    lda     colorLst_R,x
-;    cmp     targetCol
-;;    beq     .foundTargetCol
-;    bne     .nextIndex
-;    sbc     colorLst_R+NUM_CELLS/2
-;    and     #$0f
-;    cmp     #$02+1
-;    bcc     .foundTargetCol
-;    cmp     #$0e
-;    bcs     .foundTargetCol
-;.nextIndex
-;    dey
-;    bpl     .loopCheck
-;    bmi     .skipNewCol
-
 .foundTargetCol
   IF REMOVE_CELLS
     lda     #EMPTY_COL
@@ -1201,26 +1267,26 @@ NextRandom SUBROUTINE
     rts
 ; NextRandom
 
-    ALIGN_FREE_LBL  256, "SetXPos"
-
-;---------------------------------------------------------------
-SetXPos SUBROUTINE
-;---------------------------------------------------------------
-    sec
-    sta     WSYNC
-WaitObject:
-    sbc     #$0f            ; 2
-    bcs     WaitObject      ; 3/2
-    CHECKPAGE WaitObject
-    eor     #$07            ; 2
-    asl                     ; 2
-    asl                     ; 2
-    asl                     ; 2
-    asl                     ; 2
-    sta     HMP0,x          ; 4
-    sta.wx  RESP0,x         ; 5     @23!
-    rts
-; SetXPos
+;    ALIGN_FREE_LBL  256, "SetXPos"
+;
+;;---------------------------------------------------------------
+;SetXPos SUBROUTINE
+;;---------------------------------------------------------------
+;    sec
+;    sta     WSYNC
+;WaitObject:
+;    sbc     #$0f            ; 2
+;    bcs     WaitObject      ; 3/2
+;    CHECKPAGE WaitObject
+;    eor     #$07            ; 2
+;    asl                     ; 2
+;    asl                     ; 2
+;    asl                     ; 2
+;    asl                     ; 2
+;    sta     HMP0,x          ; 4
+;    sta.wx  RESP0,x         ; 5     @23!
+;    rts
+;; SetXPos
 
 
 ;===============================================================================
@@ -1230,118 +1296,118 @@ WaitObject:
 
 DigitGfx
 Four
-    .byte   %00001100
-    .byte   %00001100
-    .byte   %11111110
-    .byte   %11111110
-    .byte   %11001100
-    .byte   %11101100
-    .byte   %01101100
-    .byte   %01111100
-    .byte   %00111100
-    .byte   %00111100
+    .byte   %00000110
+    .byte   %00000110
+    .byte   %01111111
+    .byte   %01111111
+    .byte   %01100110
+    .byte   %01110110
+    .byte   %00110110
+    .byte   %00111110
+    .byte   %00011110
+    .byte   %00011110
 FONT_H = . - Four
 
 Seven
-    .byte   %01110000
-    .byte   %01110000
-    .byte   %01110000
-    .byte   %01110000
-    .byte   %01111000
+    .byte   %00111000
+    .byte   %00111000
+    .byte   %00111000
+    .byte   %00111000
     .byte   %00111100
     .byte   %00011110
-    .byte   %00001110
+    .byte   %00001111
+    .byte   %00000111
 ;    .byte   %01111111
 ;    .byte   %01111111
 Two
-    .byte   %11111110
-    .byte   %11111110
-    .byte   %11110000
+    .byte   %01111111
+    .byte   %01111111
     .byte   %01111000
     .byte   %00111100
     .byte   %00011110
-    .byte   %00001110
-    .byte   %11001110
-    .byte   %11111110
+    .byte   %00001111
+    .byte   %00000111
+    .byte   %01100111
+    .byte   %01111111
 ;    .byte   %00111110
 Six
-    .byte   %01111100
-    .byte   %11111110
-    .byte   %11100110
-    .byte   %11100110
-    .byte   %11111110
-    .byte   %11111100
-    .byte   %11100000
-    .byte   %11100110
-    .byte   %11111110
+    .byte   %00111110
+    .byte   %01111111
+    .byte   %01110011
+    .byte   %01110011
+    .byte   %01111111
+    .byte   %01111110
+    .byte   %01110000
+    .byte   %01110011
+    .byte   %01111111
 ;    .byte   %00111110
 Three
-    .byte   %01111100
-    .byte   %11111110
-    .byte   %11001110
-    .byte   %00001110
-    .byte   %00111100
-    .byte   %00111100
-    .byte   %00001110
-    .byte   %11001110
-    .byte   %11111110
+    .byte   %00111110
+    .byte   %01111111
+    .byte   %01100111
+    .byte   %00000111
+    .byte   %00011110
+    .byte   %00011110
+    .byte   %00000111
+    .byte   %01100111
+    .byte   %01111111
 ;    .byte   %00111110
 Nine
-    .byte   %01111100
-    .byte   %11111110
-    .byte   %11001110
-    .byte   %00001110
-    .byte   %01111110
-    .byte   %11111110
-    .byte   %11001110
-    .byte   %11001110
-    .byte   %11111110
+    .byte   %00111110
+    .byte   %01111111
+    .byte   %01100111
+    .byte   %00000111
+    .byte   %00111111
+    .byte   %01111111
+    .byte   %01100111
+    .byte   %01100111
+    .byte   %01111111
 ;    .byte   %00111110
 Eight
-    .byte   %01111100
-    .byte   %11111110
-    .byte   %11001110
-    .byte   %11001110
-    .byte   %01111100
-    .byte   %01111100
-    .byte   %11001110
-    .byte   %11001110
-    .byte   %11111110
+    .byte   %00111110
+    .byte   %01111111
+    .byte   %01100111
+    .byte   %01100111
+    .byte   %00111110
+    .byte   %00111110
+    .byte   %01100111
+    .byte   %01100111
+    .byte   %01111111
 ;    .byte   %00111110
 Zero
-    .byte   %01111100
-    .byte   %11111110
-    .byte   %11000110
-    .byte   %11000110
-    .byte   %11010110
-    .byte   %11010110
-    .byte   %11000110
-    .byte   %11000110
-    .byte   %11111110
+    .byte   %00111110
+    .byte   %01111111
+    .byte   %01100011
+    .byte   %01100011
+    .byte   %01101011
+    .byte   %01101011
+    .byte   %01100011
+    .byte   %01100011
+    .byte   %01111111
 ;    .byte   %00111110
 Five
-    .byte   %01111100
-    .byte   %11111110
-    .byte   %11001110
-    .byte   %00001110
+    .byte   %00111110
+    .byte   %01111111
+    .byte   %01100111
+    .byte   %00000111
+    .byte   %00111111
     .byte   %01111110
-    .byte   %11111100
-    .byte   %11000000
-    .byte   %11000000
-    .byte   %11111110
-    .byte   %11111110
+    .byte   %01100000
+    .byte   %01100000
+    .byte   %01111111
+    .byte   %01111111
 
 One
-    .byte   %00011000
-    .byte   %00011000
-    .byte   %00011000
-    .byte   %00011000
-    .byte   %00011000
-    .byte   %00011000
-    .byte   %00011000
-    .byte   %01111000
-    .byte   %01111000
-    .byte   %00111000
+    .byte   %00001100
+    .byte   %00001100
+    .byte   %00001100
+    .byte   %00001100
+    .byte   %00001100
+    .byte   %00001100
+    .byte   %00001100
+    .byte   %00111100
+    .byte   %00111100
+    .byte   %00011100
   CHECKPAGE_DATA_LBL DigitGfx, "DigitGfx"
 
 DigitPtr
@@ -1411,7 +1477,6 @@ PrevHueTbl = . - 1
 ;    .byte   CYAN_GREEN  >>4 ; GREEN_YELLOW  $d0
     .byte   CYAN_GREEN  >>4 ; GREEN         $c0
     .byte   GREEN       >>4 ; GREEN_YELLOW  $d0
-
     .byte   GREEN_YELLOW>>4 ; GREEN_BEIGE   $e0
 NextHueTbl = . - 1
     .byte   BROWN       >>4 ; YELLOW        $10
@@ -1565,7 +1630,6 @@ Start1
     .word   Start1
     .word   Start1
   ENDIF
-
 
 
 ;===============================================================================
