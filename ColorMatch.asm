@@ -10,9 +10,24 @@
 ; - game play:
 ;   o remove found cells, either block or fall into
 ;   o swap found cells
-;   - swap random cells
+;   - swap random cells/rows/columns
 ;   - remove random cells (blocking), keep path?
 ;   - automatically move whole screen and/or random/specific rows/columns
+;   - require a button press, indicated with ? or ! on central sprite
+;   - multiple levels
+;     - 1 ordered
+;     - 2 roll columns with time
+;     - 2 roll rows with time
+;     - 2 swap rows with time
+;     - 3 swap columns with time
+;     - 4 initially rolled/swapped rows
+;     - 5 initially rolled/swapped columns
+;     - 6 remove found cells (non blocking)
+;     - 7 remove found cells (blocking)
+;     - 8 swap found cells
+;     - 9 remove found cells (deadly)
+;     -10 require confirmation
+
 ; - reduce to 11 columns to get one sprite back
 
 ; TODOs:
@@ -50,6 +65,8 @@ SWAP_CELLS      = 0
 
 SAVEKEY         = 0 ; (-~220) support high scores on SaveKey
 PLUSROM         = 0 ; (-~50)
+
+RM_LEAD_0       = 1
 
 ;===============================================================================
 ; I N C L U D E S
@@ -92,7 +109,9 @@ TIMER_SPEED     = $20
 BAR_HEIGHT      = 4
 ADD_TIMER       = MAX_TIMER*2/10
 
-NUM_TMPS        = 12
+NUM_TMPS        = 12+1
+
+DIGIT_BYTES     = 6
 
 STACK_SIZE      = 4
 
@@ -115,10 +134,10 @@ sound           .byte
 timerLst        ds 2
 timerLo         = timerLst
 timerHi         = timerLst+1
-scoreLst        ds 3
-scoreLo         = scoreLst
-scoreMid        = scoreLst+1
-scoreHi         = scoreLst+2
+digitLst        ds 3
+;scoreLo         = digitLst
+;scoreMid        = digitLst+1
+;scoreHi         = digitLst+2
 
 RAMKernel       ds KernelCodeEnd - KernelCode ; (48 bytes reserved for RAM kernel)
 
@@ -275,13 +294,65 @@ PD = KernelCode - RAMKernel     ; patch delta
 DrawScreen SUBROUTINE
 ;---------------------------------------------------------------
 
-;    lda     #0
-;    bit     SWCHB
-;    bvs     .noFlicker
-;    lda     frameCnt
-;    and     #%1
-;.noFlicker
-;    sta     .carry
+; *** Setup Digit Pointers ***
+; setup digit pointers:
+TIM_DIGITS_START
+    ldx     #(DIGIT_BYTES-0)*2  ; 10, 8
+  IF RM_LEAD_0
+    bit     .digitPtrLst+11 ; must be a high pointer (with bit 6 set)
+  ENDIF
+.loopSetDigits
+; 2/5, 1/4, 0/3
+    txa
+    lsr
+    lsr
+    tay
+; setup high nibble:
+    lda     digitLst,y
+    pha
+    lsr
+    lsr
+    lsr
+    lsr
+    tay
+  IF RM_LEAD_0
+    bne     .skip0HiV
+    bvc     .skip0Hi
+    ldy     #ID_BLANK
+    NOP_IMM
+.skip0HiV
+    clv
+.skip0Hi
+  ENDIF
+    lda     DigitPtrTbl,y
+.setDigitPtrMSB
+    sta     .digitPtrLst-2,x
+; setup low nibble:
+    pla
+    and     #$0f
+    tay
+  IF RM_LEAD_0
+    bne     .skip0LoV
+;    txa                     ; last digit 0 is always displayed (but 0 is never displayed in game)
+;    beq     .skip0Lo
+    bvc     .skip0Lo
+    ldy     #ID_BLANK
+    NOP_IMM
+.skip0LoV
+    clv
+.skip0Lo
+  ENDIF
+    lda     DigitPtrTbl,y
+.setDigitPtrLSB
+    sta     .digitPtrLst,x
+; loop:
+    dex
+    dex
+    dex
+    dex
+    bpl     .loopSetDigits
+TIM_DIGITS_END
+; 196 cycles
 
     ldx     #227+11
 .waitTim
@@ -323,12 +394,13 @@ WaitBar
     stx     COLUP1              ; 2 =  5    X = 0
 
     START_TMP
-.pf0a   .byte
-.pf1a   .byte
-.pf2a   .byte
-.pf2b   .byte
-.pf1b   .byte
-.pf0b   .byte
+.dummy  ds 1
+.pf0a   ds 2
+.pf1a   ds 2
+.pf2a   ds 2
+.pf2b   ds 2
+.pf1b   ds 2
+.pf0b   ds 1
     END_TMP
 
     lda     timerHi             ; 3
@@ -420,10 +492,12 @@ WaitBar
     sta     WSYNC               ; 3
 ;---------------------------------------
     START_TMP
-.rowCount   .byte
+.dummy      ds 1
+.rowCount   ds 2
+.tmpColP0   ds 2
+.tmpColP1   ds 2
+            ds 4
 .colorPtr   ds 2
-.tmpColP0   .byte
-.tmpColP1   .byte
     END_TMP
 
     stx     COLUBK              ; 3
@@ -509,13 +583,13 @@ WaitGap
     sta     WSYNC
 ;---------------------------------------------------------------
     START_TMP
-.ptrLst     ds  12
-.ptr0       = .ptrLst
-.ptr1       = .ptrLst+2
-.ptr2       = .ptrLst+4
-.ptr3       = .ptrLst+6
-.ptr4       = .ptrLst+8
-.ptr5       = .ptrLst+10
+.digitPtrLst    ds  12
+.digitPtr0      = .digitPtrLst
+.digitPtr1      = .digitPtrLst+2
+.digitPtr2      = .digitPtrLst+4
+.digitPtr3      = .digitPtrLst+6
+.digitPtr4      = .digitPtrLst+8
+.digitPtr5      = .digitPtrLst+10
     END_TMP
 
     ldy     #0
@@ -526,16 +600,16 @@ WaitGap
     sty     GRP1
 
     lda     #>DigitGfx
-    sta     .ptr0+1
-    sta     .ptr1+1
-    sta     .ptr2+1
-    sta     .ptr3+1
-    sta     .ptr4+1
+    sta     .digitPtr0+1
+    sta     .digitPtr1+1
+    sta     .digitPtr2+1
+    sta     .digitPtr3+1
+    sta     .digitPtr4+1
 
     sta.w   RESP0
     sta     RESP1
 
-    sta     .ptr5+1
+    sta     .digitPtr5+1
     lda     #%10011
     sta     HMP1
     sta     NUSIZ0
@@ -543,18 +617,18 @@ WaitGap
     sta     VDELP0
     sta     VDELP1
 
-    lda     #<One
-    sta     .ptr0
-    lda     #<Two
-    sta     .ptr1
-    lda     #<Three
-    sta     .ptr2
-    lda     #<Four
-    sta     .ptr3
-    lda     #<Five
-    sta     .ptr4
+;    lda     #<One
+;    sta     .digitPtr0
+;    lda     #<Two
+;    sta     .digitPtr1
+;    lda     #<Three
+;    sta     .digitPtr2
+;    lda     #<Four
+;    sta     .digitPtr3
+;    lda     #<Five
+;    sta     .digitPtr4
     lda     #<Zero
-    sta     .ptr5
+    sta     .digitPtr5
 
     lda     #$0e
     sta     COLUP0
@@ -562,19 +636,19 @@ WaitGap
 
     ldy     #FONT_H-1
 .loopScore
-    lda     (.ptr0),y       ; 5
+    lda     (.digitPtr0),y  ; 5
     sta     WSYNC           ; 3 =  8
 ;---------------------------------------
     sta     HMOVE           ; 3
     sta     GRP0            ; 3
-    lda     (.ptr1),y       ; 5
+    lda     (.digitPtr1),y  ; 5
     sta     GRP1            ; 3
-    lda     (.ptr2),y       ; 5
+    lda     (.digitPtr2),y  ; 5
     sta     GRP0            ; 3 = 22
-    lax     (.ptr5),y       ; 5
+    lax     (.digitPtr5),y  ; 5
     txs                     ; 2
-    lax     (.ptr3),y       ; 5
-    lda     (.ptr4),y       ; 5
+    lax     (.digitPtr3),y  ; 5
+    lda     (.digitPtr4),y  ; 5
     stx     GRP1            ; 3 = 20
     sta     GRP0            ; 3
     tsx                     ; 2
@@ -662,6 +736,13 @@ GameInit SUBROUTINE
     sta     timerHi
     lda     #255
     sta     timerLo
+
+    lda     #$12
+    sta     digitLst
+    lda     #$34
+    sta     digitLst+1
+    lda     #$56
+    sta     digitLst+2
 
 SetupColors
 .colorPtrR  = tmpVars
@@ -1408,11 +1489,16 @@ One
     .byte   %00111100
     .byte   %00111100
     .byte   %00011100
+
+Blank
+    ds  FONT_H, 0
   CHECKPAGE_DATA_LBL DigitGfx, "DigitGfx"
 
-DigitPtr
-    .byte   <Zero, <One, <Two, <Three, <Four
-    .byte   <Five, <Six, <Seven, <Eight, <Nine
+DigitPtrTbl
+    .byte   <Zero,  <One,   <Two,   <Three, <Four
+    .byte   <Five,  <Six,   <Seven, <Eight, <Nine
+ID_BLANK = . - DigitPtrTbl
+    .byte   <Blank
 
 MultTbl
 _IDX    SET 0
