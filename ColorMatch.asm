@@ -31,7 +31,6 @@
 ; - better randomization
 ; o reset switch
 ; - use SELECT
-; - progress bar
 ; - pause at end of round
 ; - swap rows/cols
 
@@ -45,6 +44,7 @@
 ; + timer bar below main kernel
 ; + score position below
 ; + hue delta tbl
+; + progress bar
 
 
 START_ROUND     = NUM_ROUNDS-1
@@ -332,8 +332,6 @@ PD = KernelCode - RAMKernel     ; patch delta
 
     ds      256, $ff
 
-    ds      3, 0
-
 ;---------------------------------------------------------------
 DrawKernel SUBROUTINE
 ;---------------------------------------------------------------
@@ -562,6 +560,13 @@ WaitGap
     sta     HMP1                ; 3
     stx     GRP1                ; 3
     stx     COLUP1
+
+    lda     #$20|%011           ; 2
+    sta     VDELP0              ; 3
+    sta     NUSIZ0              ; 3
+    lsr
+    sta     HMP0
+
     lda     timerHi             ; 3
     clc
     adc     #6                  ; 2
@@ -643,10 +648,8 @@ WaitBar
     lda     .noTimerCol         ; 3
     sta     COLUPF              ; 2
 .loopBar
-;    lda     #NO_TIMER_COL
     sta     WSYNC               ; 3 =  9
 ;---------------------------------------
-;    sta     COLUPF              ; 3
     nop                         ; 2
     lda     .timerCol           ; 3
     sta     COLUBK              ; 3
@@ -673,20 +676,25 @@ WaitBar
 ;---------------------------------------------------------------
 ; *** Draw score ***
                                 ;           @50
-    ldy     #%10011             ; 2
-    sty     HMP1                ; 3
-    sty     VDELP0              ; 3
-    sty     NUSIZ0              ; 3
-    lda     #$0e                ; 2
-    sta     COLUP0              ; 3
-    SLEEP   8                   ; 8
-    sty     VDELP1              ; 3 = 27    @01
-    sty     NUSIZ1              ; 3
-    sta     COLUP1              ; 3 =  6
+    ldy     #$0e                ; 2
+    lda     #$20|%001           ; 2
+    sty     COLUP0              ; 3
+    stx     HMBL                ; 3
+    stx     PF2                 ; 3 = 13    @63
+    sta     HMP1                ; 3
+    SLEEP   4                   ; 2
+    stx     PF1                 ; 3 =  8    @71
+
+    sta     VDELP1              ; 3         @74
+;---------------------------------------
+    stx     PF0                 ; 3         @01
+    sta     NUSIZ1              ; 3         @04
+    sty     COLUP1              ; 3 =  6    @07
 
     stx     ENABL               ; 3
     stx     COLUBK              ; 3         @10
-    stx     COLUPF              ; 3 =  9    @13
+    lda     #BROWN|$e
+    sta     COLUPF              ; 3 =  9    @13
 
     ldx     #DIGIT_BYTES-1      ; 2
     ldy     #DIGIT_BYTES*2-2    ; 2 =  4
@@ -699,61 +707,50 @@ WaitBar
     bne     .loopMove           ; 3/2=18/17 (last byte already at right position)
 ; total: 4+5*18-1=93                        @13+93 = @30
 
+    sta     RESBL               ; 3
+    sta     RESP0               ; 3         @43!
+    sta     RESP1               ; 3  = 9    @46!
+
     lda     #>DigitGfx          ; 2
-
-    sta     RESP0               ; 3         @38!
-    sta     RESP1               ; 3  = 6    @41!
-
     sta     .digitPtr0+1        ; 3
     sta     .digitPtr1+1        ; 3
     sta     .digitPtr2+1        ; 3
     sta     .digitPtr3+1        ; 3
     sta     .digitPtr4+1        ; 3
-    sta     .digitPtr5+1        ; 3 = 18    @59
+    sta     .digitPtr5+1        ; 3 = 20    @66
 
-
-;    lda     #<One
-;    sta     .digitPtr0
-;    lda     #<Two
-;    sta     .digitPtr1
-;    lda     #<Three
-;    sta     .digitPtr2
-;    lda     #<Four
-;    sta     .digitPtr3
-;    lda     #<Five
-;    sta     .digitPtr4
-;    lda     #<Zero
-;    sta     .digitPtr5
-
-    ldy     #FONT_H-1       ; 2
+    ldy     #FONT_H-1           ; 2
 .loopScore
-    lda     (.digitPtr0),y  ; 5
-    sta     WSYNC           ; 3 =  8
+    lda     (.digitPtr0),y      ; 5
+    sta     WSYNC               ; 3 =  8
 ;---------------------------------------
-    sta     HMOVE           ; 3
-    sta     GRP0            ; 3
-    lda     (.digitPtr1),y  ; 5
-    sta     GRP1            ; 3
-    lda     (.digitPtr2),y  ; 5
-    sta     GRP0            ; 3 = 22
-    lax     (.digitPtr5),y  ; 5
-    txs                     ; 2
-    lax     (.digitPtr3),y  ; 5
-    lda     (.digitPtr4),y  ; 5
-    stx     GRP1            ; 3 = 20
-    sta     GRP0            ; 3
-    tsx                     ; 2
-    stx     GRP1            ; 3
-    sta     GRP0            ; 3
-    sta     HMCLR           ; 3
-    dey                     ; 2
-    bpl     .loopScore      ; 3/2=19
+    sta     HMOVE               ; 3
+    SLEEP   2
+    sta     ENABL               ; 3
+    lda     (.digitPtr1),y      ; 5
+    sta     GRP0                ; 3
+    lda     (.digitPtr2),y      ; 5
+    sta     GRP1                ; 3 = 22
+    lax     (.digitPtr5),y      ; 5
+    txs                         ; 2
+    lax     (.digitPtr3),y      ; 5
+    lda     (.digitPtr4),y      ; 5
+    stx     GRP0                ; 3 = 20
+    sta     GRP1                ; 3
+    tsx                         ; 2
+    stx     GRP0                ; 3
+    sta     GRP1                ; 3
+    sta     HMCLR               ; 3
+    dey                         ; 2
+    bpl     .loopScore          ; 3/2=19
     iny
+    sty     ENABL
     sty     GRP0
     sty     GRP1
-    sty     GRP0
+;    sty     GRP0
     sty     VDELP0
     sty     VDELP1
+    sty     COLUPF
 
     ldx     #2
 .waitScreen
@@ -1595,10 +1592,9 @@ GetRandomCellIdx SUBROUTINE
     cmp     IndexTbl,x
     beq     .loopRandom
     dex
-    bne     .loopRandom
+    bne     .cellOk
     tax
-    lda     colorLst_R,x
-    cmp     #EMPTY_COL
+    lda     colorLst_R,x    ; EMPTY_COL?
     beq     .repeatRandom
     rts
 
@@ -1944,7 +1940,7 @@ One
     .byte   %00011100
 
 ProgressBar
-    ds  FONT_H, %11111100
+    ds  FONT_H, $02;%11111100
 Blank
     ds  FONT_H, 0
   CHECKPAGE_DATA_LBL DigitGfx, "DigitGfx"

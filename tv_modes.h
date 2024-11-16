@@ -57,7 +57,7 @@ GREEN_BEIGE     = $e0
 ;BEIGE           = $f0
   ELSE
 YELLOW          = $20
-;BROWN           = YELLOW
+BROWN           = YELLOW
 ORANGE          = $40
 RED             = $60
 MAUVE           = $80
