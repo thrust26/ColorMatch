@@ -4,11 +4,6 @@
 ; Bug: ScrollLeft, bottom row
 
 ; Ideas:
-; - 4 game variations:
-;   - ordered colors
-;   - random row order
-;   - random column order
-;   - random cells
 ; - game play:
 ;   o remove found cells, either block or fall into
 ;   o swap found cells
@@ -35,20 +30,30 @@
 ; TODOs:
 ; - better randomization
 ; o reset switch
-; - timer, bonus when found fast
-;   - either time per block (getting less)
-;   - or total time
-; o timer bar above or below main kernel?
-; o score position?
+; - use SELECT
+; - progress bar
+; - pause at end of round
+; - swap rows/cols
+
+; DONEs:
+; + game variations:
+;   + ordered colors
+;   + random row order
+;   + random column order
+;   + random cells
+; + timer, bonus score when found fast
+; + timer bar below main kernel
+; + score position below
+; + hue delta tbl
 
 
-START_ROUND     = 0;NUM_ROUNDS-1
+START_ROUND     = NUM_ROUNDS-1
 
 ;===============================================================================
 ; A S S E M B L E R - S W I T C H E S
 ;===============================================================================
 
-VERSION         = $0010
+VERSION         = $0020
 BASE_ADR        = $f000
 
   IFNCONST TV_MODE ; manually defined here
@@ -63,7 +68,6 @@ ILLEGAL         = 1
 DEBUG           = 1
 
 BLOCK_CELLS     = 1
-SWAP_CELLS      = 1
 
 SAVEKEY         = 0 ; (-~220) support high scores on SaveKey
 PLUSROM         = 0 ; (-~50)
@@ -92,20 +96,12 @@ BLACK2          = BLACK
 BLACK2          = BLACK+2
   ENDIF
 
-;  IF NTSC_COL
-;NO_TIMER_COL    = BLACK2+$2
-;TIMER_COL       = BLUE_CYAN|$c
-;  ELSE
-;NO_TIMER_COL    = BLACK2+$6
-;TIMER_COL       = BLUE_CYAN|$c
-;  ENDIF
+TIMER_COL       = GREEN+$8  ;BLUE_CYAN+$c
+TIMER_CX_COL    = RED+$e    ;BLUE_CYAN+$6
+NO_TIMER_COL    = BLACK2+$4
+NO_TIMER_CX_COL = RED+$8    ;BLACK2+$2
 
-TIMER_COL       = BLUE_CYAN|$c
-TIMER_CX_COL    = BLUE_CYAN|$6
-NO_TIMER_COL    = BLACK2+$6
-NO_TIMER_CX_COL = BLACK2+$2
-
-EMPTY_COL       = BLACK;|$1
+EMPTY_COL       = BLACK;+$1
 
 
 ;===============================================================================
@@ -339,7 +335,7 @@ PD = KernelCode - RAMKernel     ; patch delta
     ds      3, 0
 
 ;---------------------------------------------------------------
-DrawScreen SUBROUTINE
+DrawKernel SUBROUTINE
 ;---------------------------------------------------------------
     START_TMP
 .digitPtrLst    ds  12
@@ -357,19 +353,35 @@ DrawScreen SUBROUTINE
 .tmpColP0   ds 1
 .tmpColP1   ds 1
     END_TMP
-.cursorPF2  = $ff-4     ; TODO
+.cursorPF2  = $fd   ; TODO
 
 ; *** Setup Digit Pointers ***
 ; setup digit pointers (fills the first 6 bytes of digitPtrLst):
 TIM_DIGITS_START
+
     ldx     #DIGIT_BYTES/2-1
+    lda     scoreLst,x
+    pha
+; setup progress bar
+    lda     cellCnt
+    clc
+    adc     #7
+    lsr
+    lsr
+    lsr
+    eor     #$ff
+    clc
+    adc     #<Blank+1
   IF RM_LEAD_0
     bit     .digitPtrLst+11 ; must be a high pointer (with bit 6 set)
 ;    bit     $ffff
+    bvs     .enterScoreLoop
+  ELSE
+    bne     .enterScoreLoop
   ENDIF
+
 .loopSetDigits
 ; 2/5, 1/4, 0/3
-    txa
 ; setup high nibble:
     lda     scoreLst,x
     pha
@@ -388,7 +400,7 @@ TIM_DIGITS_START
 .skip0Hi
   ENDIF
     lda     DigitPtrTbl,y
-.setDigitPtrMSB
+.enterScoreLoop
     sta     .digitPtrLst,x
 ; setup low nibble:
     pla
@@ -522,8 +534,8 @@ WaitGap
 .pf1b       ds 1
 .pf0b       ds 1
     END_TMP
-.timerCol   = $fd-2
-.noTimerCol = $fd-3
+.timerCol   = $fd
+.noTimerCol = $fd-1
 
 ; prepare energy bar (1/2):
     lda     #NO_TIMER_COL   ; 2
@@ -542,6 +554,7 @@ WaitGap
     ldx     #%000               ; 2
     stx     PF0
     stx     PF1
+    stx     PF2
     stx     NUSIZ1              ; 2
     lda     #%100001            ; 2         quad size ball, reflected PF
     sta     CTRLPF              ; 3
@@ -626,9 +639,9 @@ WaitBar
 .setPF0b
     tay                         ; 2 =  2    @..65
 
+    ldx     #BAR_HEIGHT         ; 3
     lda     .noTimerCol         ; 3
     sta     COLUPF              ; 2
-    ldx     #BAR_HEIGHT         ; 3
 .loopBar
 ;    lda     #NO_TIMER_COL
     sta     WSYNC               ; 3 =  9
@@ -749,15 +762,15 @@ WaitBar
     sta     WSYNC
 ;---------------------------------------
     stx     VBLANK
-    ldx     #$fd
+    ldx     #$ff
     txs
-    rts
-; /DrawScreen
+    jmp     ContKernel
+; /DrawKernel
 
 KernelCode ; patched into
     KERNEL_CODE
 
-    ALIGN   256
+    ALIGN_FREE_LBL   256, "PatchTbl"
 
 PatchTbl
     .byte   Col0 + 1 - PD
@@ -791,125 +804,14 @@ Start SUBROUTINE
 
     jsr     GameInit
 
-.mainLoop
-    jsr     VerticalBlank
-    jsr     DrawScreen
-    jsr     OverScan
-    jmp     .mainLoop
-
-;---------------------------------------------------------------
-GameInit SUBROUTINE
-;---------------------------------------------------------------
-    ldx     #KernelCodeEnd-KernelCode-1
-.loopCopy
-    lda     KernelCode,x
-    sta     RAMKernel,x
-    dex
-    bpl     .loopCopy
-
-    lda     INTIM
-    sta     randomLo
-
-    lda     #START_ROUND
-    sta     round
-
-    lda     #MAX_TIMER-ROUND_BONUS
-    sta     timerHi
-    bne     .contInitGame
-
-NextRound
-    ldx     round
-    inx
-    cpx     #NUM_ROUNDS
-    bcc     .roundOk
-    ldx     #NUM_ROUNDS-4
-.roundOk
-    stx     round
-.contInitGame
-    lda     #ROUND_BONUS
-    jsr     AddTimer
-    ldx     #255
-    stx     timerLo
-    inx
-    sta     frameCnt
-    asl     gameState           ; remove GAME_RUNNING flag
-    lsr     gameState
-
-    lda     #$04
-    sta     AUDC0
-    lda     #$0a
-    sta     AUDF0
-    lda     #BONUS_SOUND_LEN
-    sta     soundIdx0
-
-InitColors
-    START_TMP
-.colorPtrW  ds 2
-.lum        ds 1
-.row        ds 1
-    END_TMP
-
-    lda     #>colorLst_W
-    sta     .colorPtrW+1
-    ldy     #NUM_ROWS-1
-.loopRows
-    sty     .row
-    lda     MultTbl,y
-    sta     .colorPtrW
-    ldx     LumTbl,y
-    ldy     #NUM_COLS-1
-.loopColumns
-    txa                         ; 2
-    ora     ColorTbl,y          ; 4
-    sta     (.colorPtrW),y      ; 6
-    dey                         ; 2
-    bpl     .loopColumns        ; 3/2=17/16
-    ldy     .row
-    dey
-    bpl     .loopRows
-; 2202 cycles = ~29.0 scanlines ;
-
-;    ldy     #NUM_ROWS-1
-;;    ldx     #0
-;.loopRows
-;    sty     .row
-;    ldx     MultTbl,y
-;    lda     LumTbl,y
-;    sta     .lum
-;    clc
-;    ldy     #0
-;_VAL SET 0
-;  REPEAT NUM_COLS
-;    lda     .lum                ; 2
-;    ora     ColorTbl + _VAL,y   ; 4
-;    sta     colorLst_W + _VAL,x ; 5
-;_VAL SET _VAL + 1
-;  REPEND
-;;    txa
-;;    adc     #NUM_COLS
-;;    tax
-;    ldy     .row
-;    dey
-;    bpl     .loopRows
-;; 1639 cycles
-
-    ldy     round
-    lda     RoundFlags,y
-    sta     roundFlags
-    lda     RoundLen,y
-;    tya
-;    clc
-;    adc     #ROUND_CELLS
-    sta     cellCnt
-
-    jsr     GetRandomCellIdx
-    sta     targetCol
-    rts
-; /GameInit
-
+MainLoop
 ;---------------------------------------------------------------
 VerticalBlank SUBROUTINE
 ;---------------------------------------------------------------
+.waitTim
+    lda     INTIM
+    bne     .waitTim
+
     lda     #%1110          ; each '1' bits generate a VSYNC ON line (bits 1..3)
 .loopVSync
     sta     WSYNC           ; 1st '0' bit resets Vsync, 2nd '0' bit exits loop
@@ -980,8 +882,258 @@ TIM_S
     bne     .skipResetColors
     jsr     InitColors
 .skipResetColors
-    rts
 ; /VerticalBlank
+
+    jmp     DrawKernel
+ContKernel
+
+;---------------------------------------------------------------
+OverScan SUBROUTINE
+;---------------------------------------------------------------
+  IF NTSC_TIM
+    lda     #36-7+6+1
+  ELSE
+    lda     #63
+  ENDIF
+    sta     TIM64T
+
+TIM_OVS
+    lda     gameState                   ; GAME_RUNNING?
+    bmi     .contRunning
+    jmp     .skipRunning
+
+.contRunning
+    lda     #TIMER_SPEED
+    bit     roundFlags                  ; BURN_EMPTY?
+    bvc     .skipBurn
+    ldx     colorLst_R+NUM_CELLS/2
+    bne     .skipBurn
+    stx     AUDF1
+    lda     #$08
+    sta     AUDC1
+;    lda     #10
+    sta     soundIdx1
+    lda     #TIMER_SPEED * 8
+.skipBurn
+    clc
+    adc     timerLo
+    sta     timerLo
+    bcc     .skipTimerHi
+    lda     timerHi
+    beq     .skipTimerHi
+    dec     timerHi
+.skipTimerHi
+
+; check for color match (TODO: can be done every 2nd frame)
+    bit     SWCHB
+    bpl     .coarseCheck
+    ldx     #NUM_CELLS/2
+    lda     colorLst_R+NUM_CELLS/2
+    cmp     targetCol
+    beq     .foundTargetCol
+    jmp     .skipNewCol
+
+.coarseCheck
+; check if any cell nearby is close (delta hue OR (todo) delta val <= 2)
+;.tmpDiff    = tmpVars
+MAX_HUE_DIFF    = $01
+MAX_VAL_DIFF    = $02
+
+; compare hue:
+.checkHue
+    lda     targetCol
+    lsr
+    lsr
+    lsr
+    lsr
+    tay
+    lda     colorLst_R+NUM_CELLS/2
+    lsr
+    lsr
+    lsr
+    lsr
+    tax
+    lda     HueIdx,y
+    sec
+    sbc     HueIdx,x                    ; same hue?
+    beq     .checkRangeValue            ;  yes, check value +/-2
+    adc     #MAX_HUE_DIFF               ; -2 -> -1x; -1 -> 0; 0 -> 2; 1 -> 3; 2 -> 4x
+    cmp     #MAX_HUE_DIFF*2+1+1         ; difference <= 1?
+    bcc     .checkSameValue             ;  yes, check for same value
+    bcs     .skipNewCol                 ;  no, no match
+
+; compare value:
+.checkRangeValue    ; hue is the same
+    lda     targetCol
+    sec
+    sbc     colorLst_R+NUM_CELLS/2
+    clc
+    adc     #MAX_VAL_DIFF
+    cmp     #MAX_VAL_DIFF*2+1
+    bcs     .skipNewCol                 ;  no, no match
+    bcc     .foundTargetCol             ;  yes, match!
+
+.checkSameValue
+    lda     targetCol
+    eor     colorLst_R+NUM_CELLS/2
+    and     #$0f
+    bne     .skipNewCol                 ;  no, no match
+.foundTargetCol
+    lda     roundFlags
+    and     #KEEP_CELLS
+    bne     .skipEmpty
+    lda     #EMPTY_COL
+    sta     colorLst_W+NUM_CELLS/2
+.skipEmpty
+    jsr     GetRandomCellIdx
+    sta     targetCol
+; increase score:
+    lda     #$50
+    jsr     AddScore0
+; start found soundIdx0:
+    lda     #FOUND_SOUND_LEN
+    sta     soundIdx0
+    lda     #$04
+    sta     AUDC0
+    lda     #$0e
+    sta     AUDF0
+; add extra time:
+    lda     #CELL_BONUS
+    jsr     AddTimer
+    dec     cellCnt
+    bne     .skipNextRound
+    jsr     NextRound
+.skipNextRound
+
+.skipNewCol
+
+    lda     frameCnt                ; TODO: can be done every 2nd frame
+    and     #$03
+    beq     .doApplyObst
+.skipApplyObstJmp
+    jmp     .skipApplyObst
+
+.doApplyObst
+    lda     obstSum
+    clc
+    adc     #OBST_SPPED
+    sta     obstSum
+    bcc     .skipApplyObstJmp
+;    lda     frameCnt
+;    and     #$3f
+;    bne     .skipApplyObst
+; check for scrolling
+    lda     roundFlags
+    and     #SWAP_FOUND|SCROLL_ROWS|SCROLL_COLS
+    beq     .skipApplyObst
+    ldx     soundIdx1
+    bne     .skipTick
+    ldx     #TICK_SOUND_LEN
+    stx     soundIdx1
+    ldx     #$08
+    stx     AUDC1
+    ldx     #$04
+    stx     AUDV1
+.skipTick
+    and     #SCROLL_ROWS|SCROLL_COLS
+    beq     .skipScrolls
+; scroll either rows or columns or both
+; determine direction:
+    tax
+    jsr     NextRandom
+    and     ScrollMask,x        ; 0..1, 2..3, 0..3; %01, %10, %11
+    ora     DirOfs,x            ; 0, 2, 0
+    tay
+    lda     DirBits,y
+    asl                         ; A = ????....
+    tax
+    bcs     .scrollCol
+; determine row:
+    ldy     #2                  ; 2 tries, 9/16 ok, 7/16*9/16 ok
+.randomRow
+    jsr     NextRandom          ; TODO: improve
+    and     #$0f
+    cmp     #NUM_ROWS
+    bcc     .validRow
+    dey
+    bne     .randomRow
+    lsr
+.validRow
+    tay
+
+;    ldy     #0
+;    ldx     #%01111110
+
+    lda     RowOfs,y
+    cpx     #%01111110
+    bne     .scrollLeft
+    adc     #NUM_COLS-1
+.scrollLeft
+;    lda     RowOfsR,y
+;    cpx     #%01111110
+;    beq     .scrollRight
+;    lda     RowOfsL,y
+;.scrollRight
+    tay
+    bpl     .doScroll
+    DEBUG_BRK
+
+.scrollCol
+.randomCol
+    jsr     NextRandom          ; TODO: improve
+    and     #$0f
+    cmp     #NUM_COLS
+    bcs     .randomCol
+    tay
+    lda     ColOfsU,y
+    cpx     #%11101110
+    beq     .scrollUp
+    lda     ColOfsD,y
+.scrollUp
+    tay
+.doScroll
+    clv
+    jsr     ScrollCells
+.skipScrolls
+; swap cells:
+    START_TMP
+.xCell0     ds 1
+    END_TMP
+    lda     roundFlags
+    and     #SWAP_FOUND
+    beq     .skipSwap
+    jsr     GetRandomCellIdx
+    stx     .xCell0
+    jsr     GetRandomCellIdx
+    ldy     .xCell0
+    lda     colorLst_R,x
+    pha
+    lda     colorLst_R,y
+    sta     colorLst_W,x
+    pla
+    sta     colorLst_W,y
+.skipSwap
+.skipApplyObst
+
+.skipRunning
+
+; continue sound 0:
+    ldy     soundIdx0
+    beq     .skipSound0
+    lda     VolumeTbl-1,y
+    sta     AUDV0
+    dec     soundIdx0
+.skipSound0
+; continue sound 1:
+    ldy     soundIdx1
+    beq     .skipSound1
+    ldy     #8
+    dec     soundIdx1
+.skipSound1
+    sty     AUDV1
+
+TIM_OVE ; 1870
+    jmp     MainLoop
 
 ;---------------------------------------------------------------
 ScrollCells SUBROUTINE
@@ -1398,262 +1550,6 @@ SaveLeftColumn
     bpl     .loopSave
     rts
 
-;---------------------------------------------------------------
-OverScan SUBROUTINE
-;---------------------------------------------------------------
-  IF NTSC_TIM
-    lda     #36-7+6
-  ELSE
-    lda     #63
-  ENDIF
-    sta     TIM64T
-
-    lda     gameState                   ; GAME_RUNNING?
-    bmi     .contRunning
-    jmp     .skipRunning
-
-.contRunning
-    lda     #TIMER_SPEED
-    bit     roundFlags                  ; BURN_EMPTY?
-    bvc     .skipBurn
-    ldx     colorLst_R+NUM_CELLS/2
-    bne     .skipBurn
-    stx     AUDF1
-    lda     #$08
-    sta     AUDC1
-;    lda     #10
-    sta     soundIdx1
-    lda     #TIMER_SPEED * 8
-.skipBurn
-    clc
-    adc     timerLo
-    sta     timerLo
-    bcc     .skipTimerHi
-    lda     timerHi
-    beq     .skipTimerHi
-    dec     timerHi
-.skipTimerHi
-
-; check for color match:
-    bit     SWCHB
-    bpl     .coarseCheck
-    ldx     #NUM_CELLS/2
-    lda     colorLst_R+NUM_CELLS/2
-    cmp     targetCol
-    beq     .foundTargetCol
-    jmp     .skipNewCol
-
-.coarseCheck
-; check if any cell nearby is close (delta hue OR (todo) delta val <= 2)
-;.tmpDiff    = tmpVars
-MAX_VAL_DIFF    = $02
-
-; compare hue:
-.checkHue
-    lda     targetCol
-    lsr
-    lsr
-    lsr
-    lsr
-    tay
-    lda     colorLst_R+NUM_CELLS/2
-    lsr
-    lsr
-    lsr
-    lsr
-    cmp     PrevHueTbl,y
-    beq     .checkSameValue
-    cmp     NextHueTbl,y
-    beq     .checkSameValue
-    lda     targetCol                   ; same hue?
-    eor     colorLst_R+NUM_CELLS/2
-    and     #$f0
-    beq     .checkRangeValue            ;  yes, check value +/-2
-    bne     .skipNewCol                 ;  no, no match
-
-; compare value:
-.checkRangeValue    ; hue is the same
-    lda     targetCol
-    sec
-    sbc     colorLst_R+NUM_CELLS/2
-    clc
-    adc     #MAX_VAL_DIFF
-    cmp     #MAX_VAL_DIFF*2+1
-    bcs     .skipNewCol                 ;  no, no match
-    bcc     .foundTargetCol             ;  yes, match!
-
-.checkSameValue
-    lda     targetCol
-    eor     colorLst_R+NUM_CELLS/2
-    and     #$0f
-    bne     .skipNewCol                 ;  no, no match
-.foundTargetCol
-;    lda     roundFlags
-;    and     #SWAP_FOUND
-;    beq     .skipSwap
-;    jsr     GetRandomCellIdx
-;    tay
-;    lda     colorLst_R+NUM_CELLS/2
-;    sta     colorLst_W,x
-;    tya
-;    sta     colorLst_W+NUM_CELLS/2
-;.skipSwap
-    lda     roundFlags
-    and     #KEEP_CELLS
-    bne     .skipEmpty
-    lda     #EMPTY_COL
-    sta     colorLst_W+NUM_CELLS/2
-.skipEmpty
-    jsr     GetRandomCellIdx
-    sta     targetCol
-; increase score:
-    lda     #$00
-    ldy     #$01
-    jsr     AddScore
-; start found soundIdx0:
-    lda     #FOUND_SOUND_LEN
-    sta     soundIdx0
-    lda     #$04
-    sta     AUDC0
-    lda     #$0e
-    sta     AUDF0
-; add extra time:
-    lda     #CELL_BONUS
-    jsr     AddTimer
-    dec     cellCnt
-    bne     .skipNextRound
-    jsr     NextRound
-.skipNextRound
-
-.skipNewCol
-
-    lda     frameCnt
-    and     #$03
-    beq     .doApplyObst
-    jmp     .skipApplyObst
-
-.doApplyObst
-    lda     obstSum
-    clc
-    adc     #OBST_SPPED
-    sta     obstSum
-    bcc     .skipApplyObst
-;    lda     frameCnt
-;    and     #$3f
-;    bne     .skipApplyObst
-; check for scrolling
-    lda     roundFlags
-    and     #SWAP_FOUND|SCROLL_ROWS|SCROLL_COLS
-    beq     .skipApplyObst
-    ldx     soundIdx1
-    bne     .skipTick
-    ldx     #TICK_SOUND_LEN
-    stx     soundIdx1
-    ldx     #$08
-    stx     AUDC1
-    ldx     #$04
-    stx     AUDV1
-.skipTick
-    and     #SCROLL_ROWS|SCROLL_COLS
-    beq     .skipScrolls
-; scroll either rows or columns or both
-; determine direction:
-    tax
-DEBUG0
-    jsr     NextRandom
-    and     ScrollMask,x        ; 0..1, 2..3, 0..3; %01, %10, %11
-    ora     DirOfs,x            ; 0, 2, 0
-    tay
-    lda     DirBits,y
-    asl                         ; A = ????....
-    tax
-    bcs     .scrollCol
-; determine row:
-.randomRow
-    jsr     NextRandom
-    and     #$0f
-    cmp     #NUM_ROWS
-    bcs     .randomRow
-    tay
-
-;    ldy     #0
-;    ldx     #%01111110
-
-    lda     RowOfs,y
-    cpx     #%01111110
-    bne     .scrollLeft
-    adc     #NUM_COLS-1
-.scrollLeft
-;    lda     RowOfsR,y
-;    cpx     #%01111110
-;    beq     .scrollRight
-;    lda     RowOfsL,y
-;.scrollRight
-    tay
-    bpl     .doScroll
-    DEBUG_BRK
-
-.scrollCol
-.randomCol
-    jsr     NextRandom
-    and     #$0f
-    cmp     #NUM_COLS
-    bcs     .randomCol
-    tay
-    lda     ColOfsU,y
-    cpx     #%11101110
-    beq     .scrollUp
-    lda     ColOfsD,y
-.scrollUp
-    tay
-.doScroll
-    clv
-    jsr     ScrollCells
-.skipScrolls
-; swap cells:
-    lda     roundFlags
-    and     #SWAP_FOUND
-    beq     .skipSwap
-    jsr     GetRandomCellIdx
-    txa
-    pha
-    jsr     GetRandomCellIdx
-    pla
-    tay
-    lda     colorLst_R,x
-    pha
-    lda     colorLst_R,y
-    sta     colorLst_W,x
-    pla
-    sta     colorLst_W,y
-.skipSwap
-
-.skipApplyObst
-
-.skipRunning
-
-; continue sound 0:
-    ldy     soundIdx0
-    beq     .skipSound0
-    lda     VolumeTbl-1,y
-    sta     AUDV0
-    dec     soundIdx0
-.skipSound0
-; continue sound 1:
-    ldy     soundIdx1
-    beq     .skipSound1
-    ldy     #8
-    dec     soundIdx1
-.skipSound1
-    sty     AUDV1
-
-
-.waitTim
-    lda     INTIM
-    bne     .waitTim
-    rts
-; /OverScan
-
 ScrollMask = . - 1
     .byte   %01, %01, %11
 DirOfs = . - 1
@@ -1739,6 +1635,116 @@ BONUS_SOUND_LEN = . - VolumeTbl
 TICK_SOUND_LEN  = 1
 
 ;---------------------------------------------------------------
+GameInit SUBROUTINE
+;---------------------------------------------------------------
+    ldx     #KernelCodeEnd-KernelCode-1
+.loopCopy
+    lda     KernelCode,x
+    sta     RAMKernel,x
+    dex
+    bpl     .loopCopy
+
+    lda     INTIM
+    sta     randomLo
+
+    lda     #START_ROUND
+    sta     round
+
+    lda     #MAX_TIMER-ROUND_BONUS
+    sta     timerHi
+    bne     .contInitGame
+
+NextRound
+    ldx     round
+    inx
+    cpx     #NUM_ROUNDS
+    bcc     .roundOk
+    ldx     #NUM_ROUNDS-4
+.roundOk
+    stx     round
+.contInitGame
+    lda     #ROUND_BONUS
+    jsr     AddTimer
+    ldx     #255
+    stx     timerLo
+    inx
+    sta     frameCnt
+    asl     gameState           ; remove GAME_RUNNING flag
+    lsr     gameState
+
+    lda     #$04
+    sta     AUDC0
+    lda     #$0a
+    sta     AUDF0
+    lda     #BONUS_SOUND_LEN
+    sta     soundIdx0
+
+InitColors
+    START_TMP
+.colorPtrW  ds 2
+.lum        ds 1
+.row        ds 1
+    END_TMP
+
+    lda     #>colorLst_W
+    sta     .colorPtrW+1
+    ldy     #NUM_ROWS-1
+.loopRows
+    sty     .row
+    lda     MultTbl,y
+    sta     .colorPtrW
+    ldx     LumTbl,y
+    ldy     #NUM_COLS-1
+.loopColumns
+    txa                         ; 2
+    ora     ColorTbl,y          ; 4
+    sta     (.colorPtrW),y      ; 6
+    dey                         ; 2
+    bpl     .loopColumns        ; 3/2=17/16
+    ldy     .row
+    dey
+    bpl     .loopRows
+; 2202 cycles = ~29.0 scanlines ;
+
+;    ldy     #NUM_ROWS-1
+;;    ldx     #0
+;.loopRows
+;    sty     .row
+;    ldx     MultTbl,y
+;    lda     LumTbl,y
+;    sta     .lum
+;    clc
+;    ldy     #0
+;_VAL SET 0
+;  REPEAT NUM_COLS
+;    lda     .lum                ; 2
+;    ora     ColorTbl + _VAL,y   ; 4
+;    sta     colorLst_W + _VAL,x ; 5
+;_VAL SET _VAL + 1
+;  REPEND
+;;    txa
+;;    adc     #NUM_COLS
+;;    tax
+;    ldy     .row
+;    dey
+;    bpl     .loopRows
+;; 1639 cycles
+
+    ldy     round
+    lda     RoundFlags,y
+    sta     roundFlags
+    lda     RoundLen,y
+;    tya
+;    clc
+;    adc     #ROUND_CELLS
+    sta     cellCnt
+
+    jsr     GetRandomCellIdx
+    sta     targetCol
+    rts
+; /GameInit
+
+;---------------------------------------------------------------
 AddTimer SUBROUTINE
 ;---------------------------------------------------------------
     clc
@@ -1747,7 +1753,6 @@ AddTimer SUBROUTINE
     bcc     .setTimerHi
     sbc     #MAX_TIMER
 ; Hex2Bcd (good 0-99), 22 bytes, 26 cycles:
-DEBUG2
     tax                     ; 2         0..63
     lsr                     ; 2
     lsr                     ; 2
@@ -1757,8 +1762,7 @@ DEBUG2
     txa                     ; 2
     sed                     ; 2
     clc                     ; 2
-    adc     BcdTab,y        ; 4
-    cld                     ; 2 = 24    @26
+    adc     BcdTab,y        ; 4 = 22    @26
     jsr     AddScore0
     lda     #MAX_TIMER
 .setTimerHi
@@ -1939,6 +1943,8 @@ One
     .byte   %00111100
     .byte   %00011100
 
+ProgressBar
+    ds  FONT_H, %11111100
 Blank
     ds  FONT_H, 0
   CHECKPAGE_DATA_LBL DigitGfx, "DigitGfx"
@@ -1993,43 +1999,22 @@ ColorTbl
 ;    .byte   BEIGE           ; $f0
 ;    .byte   YELLOW          ; $10
 NUM_COLS    = . - ColorTbl  ; 13
-
-PrevHueTbl = . - 1
-    .byte   GREEN_BEIGE >>4 ; YELLOW        $10
-    .byte   YELLOW      >>4 ; BROWN         $20
-;    .byte   BROWN       >>4 ; ORANGE        $30
-;    .byte   ORANGE      >>4 ; RED           $40
-    .byte   0
-    .byte   BROWN       >>4 ; RED           $40
-    .byte   RED         >>4 ; MAUVE         $50
-    .byte   MAUVE       >>4 ; VIOLET        $60
-    .byte   VIOLET      >>4 ; PURPLE        $70
-    .byte   PURPLE      >>4 ; BLUE          $80
-    .byte   BLUE        >>4 ; BLUE_CYAN     $90
-    .byte   BLUE_CYAN   >>4 ; CYAN          $a0
-    .byte   CYAN        >>4 ; CYAN_GREEN    $b0
-;    .byte   0
-;    .byte   CYAN_GREEN  >>4 ; GREEN_YELLOW  $d0
-    .byte   CYAN_GREEN  >>4 ; GREEN         $c0
-    .byte   GREEN       >>4 ; GREEN_YELLOW  $d0
-    .byte   GREEN_YELLOW>>4 ; GREEN_BEIGE   $e0
-NextHueTbl = . - 1
-    .byte   BROWN       >>4 ; YELLOW        $10
-;    .byte   ORANGE      >>4 ; BROWN         $20
-;    .byte   RED         >>4 ; ORANGE        $30
-    .byte   RED         >>4 ; BROWN         $20
-    .byte   0
-    .byte   MAUVE       >>4 ; RED           $40
-    .byte   VIOLET      >>4 ; MAUVE         $50
-    .byte   PURPLE      >>4 ; VIOLET        $60
-    .byte   BLUE        >>4 ; PURPLE        $70
-    .byte   BLUE_CYAN   >>4 ; BLUE          $80
-    .byte   CYAN        >>4 ; BLUE_CYAN     $90
-    .byte   CYAN_GREEN  >>4 ; CYAN          $a0
-    .byte   GREEN       >>4 ; CYAN_GREEN    $b0
-    .byte   GREEN_YELLOW>>4 ; GREEN         $c0
-    .byte   GREEN_BEIGE >>4 ; GREEN_YELLOW  $d0
-    .byte   YELLOW      >>4 ; GREEN_BEIGE   $e0
+HueIdx = . - 1
+    .byte   0       ; YELLOW          $10
+    .byte   1       ; BROWN           $20
+                    ; (ORANGE)        $30
+    .byte   2       ; RED             $40
+    .byte   3       ; MAUVE           $50
+    .byte   4       ; VIOLET          $60
+    .byte   5       ; PURPLE          $70
+    .byte   6       ; BLUE            $80
+    .byte   7       ; BLUE_CYAN       $90
+    .byte   8       ; CYAN            $a0
+    .byte   9       ; CYAN_GREEN      $b0
+    .byte   10      ; GREEN           $c0
+    .byte   11      ; GREEN_YELLOW    $d0
+    .byte   12      ; GREEN_BEIGE     $e0
+                    ; (BEIGE)         $f0
   ELSE
 PAL_WHITE   = BLACK+$10     ; $10
 ColorTbl
@@ -2047,34 +2032,20 @@ ColorTbl
     .byte   GREEN_YELLOW    ; $30
     .byte   PAL_WHITE       ; $10
 NUM_COLS    = . - ColorTbl  ; 13
-PrevHueTbl = . - 1
-    .byte   GREEN_YELLOW>>4 ; PAL_WHITE     $10
-    .byte   PAL_WHITE   >>4 ; YELLOW        $20
-    .byte   GREEN       >>4 ; GREEN_YELLOW  $30
-    .byte   YELLOW      >>4 ; ORANGE        $40
-    .byte   CYAN_GREEN  >>4 ; GREEN         $50
-    .byte   ORANGE      >>4 ; RED           $60
-    .byte   CYAN        >>4 ; CYAN_GREEN    $70
-    .byte   RED         >>4 ; MAUVE         $80
-    .byte   BLUE_CYAN   >>4 ; CYAN          $90
-    .byte   MAUVE       >>4 ; VIOLET        $a0
-    .byte   BLUE        >>4 ; BLUE_CYAN     $b0
-    .byte   VIOLET      >>4 ; PURPLE        $c0
-    .byte   PURPLE      >>4 ; BLUE          $d0
-NextHueTbl = . - 1
-    .byte   YELLOW      >>4 ; PAL_WHITE     $10
-    .byte   ORANGE      >>4 ; YELLOW        $20
-    .byte   PAL_WHITE   >>4 ; GREEN_YELLOW  $30
-    .byte   RED         >>4 ; ORANGE        $40
-    .byte   GREEN_YELLOW>>4 ; GREEN         $50
-    .byte   MAUVE       >>4 ; RED           $60
-    .byte   GREEN       >>4 ; CYAN_GREEN    $70
-    .byte   VIOLET      >>4 ; MAUVE         $80
-    .byte   CYAN_GREEN  >>4 ; CYAN          $90
-    .byte   PURPLE      >>4 ; VIOLET        $a0
-    .byte   CYAN        >>4 ; BLUE_CYAN     $b0
-    .byte   BLUE        >>4 ; PURPLE        $c0
-    .byte   BLUE_CYAN   >>4 ; BLUE          $d0
+HueIdx = . - 1
+    .byte   12      ; PAL_WHITE       $10
+    .byte   0       ; YELLOW          $20
+    .byte   11      ; GREEN_YELLOW    $30
+    .byte   1       ; ORANGE          $40
+    .byte   10      ; GREEN           $50
+    .byte   2       ; RED             $60
+    .byte   9       ; CYAN_GREEN      $70
+    .byte   3       ; MAUVE           $80
+    .byte   8       ; CYAN            $90
+    .byte   4       ; VIOLET          $a0
+    .byte   7       ; BLUE_CYAN       $b0
+    .byte   5       ; PURPLE          $c0
+    .byte   6       ; BLUE            $d0
   ENDIF
 
 LumTbl
@@ -2192,6 +2163,8 @@ RoundLen
     .byte   30, 30
     .byte   35, 40
     .byte   45, 50
+    .byte   55, 60
+NUM_ROUNDS = . - RoundLen
    ENDIF ;}
 
     .byte     " ColorMatch "
