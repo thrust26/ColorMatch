@@ -23,6 +23,7 @@
 ;     - 9 remove found cells (deadly)
 ;     -10 require confirmation
 ; - reduce to 11 columns to get one sprite back
+; - improve remaining cells display (e.g. sprite over colored ball |B|)
 
 ; TODOs:
 ; - better randomization
@@ -45,7 +46,7 @@
 ; + progress bar
 
 
-START_ROUND     = 7; NUM_ROUNDS-1
+START_ROUND     = 3 ; NUM_ROUNDS-1
 
 ;===============================================================================
 ; A S S E M B L E R - S W I T C H E S
@@ -127,15 +128,18 @@ TIMER_SPEED     = (256 * MAX_TIMER + (60 * 25) / 2) / (60 * 25) ; 25 seconds
 DIGIT_BYTES     = 6
 NUM_TMPS        = DIGIT_BYTES * 2   ; 12
 
-; gameState flags
+; gameState flags:
 GAME_RUNNING    = 1 << 7
 
 ; roundFlags constants:
-SCROLL_ROWS     = 1 << 0
-SCROLL_COLS     = 1 << 1
-SWAP_ROWS       = 1 << 2    ; unused
-SWAP_COLS       = 1 << 3    ; unused
-SWAP_FOUND      = 1 << 4
+; any of these 5, values and their order must NOT be changed! (see apply obstacles)
+SCROLL_ROWS     = 1 << 0    ; affects 13 cells
+SCROLL_COLS     = 1 << 1    ; affects  9 cells,
+SWAP_FOUND      = 1 << 2    ; affects  2 cells (easiest)
+SWAP_COLS       = 1 << 3    ; affects 18 cells
+SWAP_ROWS       = 1 << 4    ; affects 26 cells
+; SWAP and SCROLL mixed creates a mess!
+; only one of these 3:
 KEEP_CELLS      = 1 << 5
 BURN_EMPTY      = 1 << 6
 BLOCK_EMPTY     = 1 << 7
@@ -359,16 +363,18 @@ TIM_DIGITS_START
     ldx     #DIGIT_BYTES/2-1
     lda     scoreLst,x
     pha
-; setup progress bar
+; setup progress bar:
     lda     cellCnt
-    clc
+    lsr
+    lsr
+    adc     cellCnt
     adc     #7
     lsr
     lsr
     lsr
     eor     #$ff
     clc
-    adc     #<Blank+1
+    adc     #<Blank
   IF RM_LEAD_0
     bit     .digitPtrLst+11 ; must be a high pointer (with bit 6 set)
 ;    bit     $ffff
@@ -529,7 +535,7 @@ WaitGap
 .pf1b       ds 1
 .pf0b       ds 1
     END_TMP
-.timerCol   = $fd
+.timerCol   = $fd           ; TODO?
 .noTimerCol = $fd-1
 
 ; prepare energy bar (1/2):
@@ -1069,7 +1075,21 @@ MAX_VAL_DIFF    = $02
 .skipApplyObstJmp
     jmp     .skipApplyObst
 
+ObstTbl
+    .byte   SWAP_ROWS, SWAP_COLS, SWAP_FOUND, SCROLL_COLS, SCROLL_ROWS
+NUM_OBST = . - ObstTbl
+ObstRndDiff
+    .byte   0, ($101/2)-1, ($102/3)-1, ($103/4)-1
+    .byte   ($104/5)-1
+    ;ff 7f 55 3f 33
+NUM_OBST = . - ObstRndDiff
+
 .doApplyObst
+    START_TMP
+.tmpObst    ds  1
+TMP_BASE    = .             ; .tmpObst has to be preserved until the end of obstacle handling!
+.obstLst    ds  NUM_OBST
+    END_TMP
     lda     obstSum
     clc
     adc     #OBST_SPPED
@@ -1077,8 +1097,9 @@ MAX_VAL_DIFF    = $02
     bcc     .skipApplyObstJmp
 ; check for scrolling
     lda     roundFlags
-    and     #SWAP_FOUND|SCROLL_COLS|SCROLL_ROWS|SWAP_COLS|SWAP_ROWS
+    and     #SCROLL_ROWS|SCROLL_COLS|SWAP_FOUND|SWAP_COLS|SWAP_ROWS ; %...54321
     beq     .skipApplyObstJmp
+; play tick sound:
 ;    ldx     soundIdx1
 ;    bne     .skipTick
     ldx     #TICK_SOUND_LEN
@@ -1087,8 +1108,34 @@ MAX_VAL_DIFF    = $02
     stx     AUDC1
     ldx     #$06
     stx     AUDV1
-.skipTick
-    and     #SCROLL_ROWS|SCROLL_COLS
+;.skipTick
+; determine which obstacle is applied this time:
+    sta     .tmpObst
+    ldx     #0
+    ldy     #NUM_OBST-1
+.loopGetObst
+    lsr     .tmpObst
+    lda     #0
+    bcc     .noObst
+    lda     ObstTbl,y
+    sta     .obstLst,x
+    inx
+.noObst
+    dey
+    bpl     .loopGetObst
+; X = number of obstacles+1
+    txa
+    tay                         ; 1..5
+    jsr     NextRandom
+    sec
+.loopSetObst
+    adc     ObstRndDiff-1,y
+    dex
+    bcs     .loopSetObst
+    lda     .obstLst,x
+    sta     .tmpObst
+
+    and     #SCROLL_ROWS|SCROLL_COLS    ; must 1 and 2!
     beq     .skipScrolls
 ; scroll either rows or columns or both
 ; determine direction:
@@ -1149,10 +1196,11 @@ MAX_VAL_DIFF    = $02
     jsr     ScrollCells
 .skipScrolls
 ; swap cells:
-    START_TMP
+    START_TMP TMP_BASE
 .xCell0     ds 1
     END_TMP
-    lda     roundFlags
+;    lda     roundFlags
+    lda     .tmpObst
     and     #SWAP_FOUND
     beq     .skipSwapCells
     jsr     GetRandomCellIdx
@@ -1167,16 +1215,114 @@ MAX_VAL_DIFF    = $02
     sta     colorLst_W,y
 .skipSwapCells
 
-    lda     roundFlags
+;    lda     roundFlags
+    lda     .tmpObst
     and     #SWAP_COLS
     beq     .skipSwapCols
-    jsr     SwapCols
+; swap cols:
+    START_TMP TMP_BASE
+.col0       ds 1
+    END_TMP
+; determine col 0:
+    ldy     #2                  ; 2 tries, 9/16 ok, 7/16*9/16 ok
+.randomCol0
+    jsr     NextRandom          ; TODO: improve
+    and     #$0f
+    cmp     #NUM_COLS
+    bcc     .validCol0
+    dey
+    bne     .randomCol0
+    lsr
+.validCol0
+    sta     .col0
+    tax
+; determine col 1:
+    ldy     #1                  ; 2 tries, 9/16 ok, 7/16*9/16 ok
+.randomCol1
+    jsr     NextRandom          ; TODO: improve
+    and     #$0f
+    cmp     #NUM_COLS
+    bcc     .validCol1
+    dey
+    bpl     .randomCol1
+    lsr
+.validCol1
+    cmp     .col0
+    beq     .randomCol1
+    tay
+    clc
+; TODO?: maybe use pointers here (faster but probably more code)
+.loopSwapCols
+    lda     colorLst_R,y
+    pha
+    lda     colorLst_R,x
+    sta     colorLst_W,y
+    pla
+    sta     colorLst_W,x
+    txa
+    adc     #NUM_COLS
+    tax
+    tya
+    adc     #NUM_COLS
+    tay
+    cmp     #NUM_CELLS
+    bcc     .loopSwapCols
 .skipSwapCols
 
-    lda     roundFlags
+;    lda     roundFlags
+    lda     .tmpObst
     and     #SWAP_ROWS
     beq     .skipSwapRows
-    jsr     SwapRows
+; swap rows
+    START_TMP TMP_BASE
+.row0       ds 1
+.count      ds 1
+    END_TMP
+; determine row 0:
+    ldy     #2                  ; 2 tries, 9/16 ok, 7/16*9/16 ok
+.randomRow0
+    jsr     NextRandom          ; TODO: improve
+    and     #$0f
+    cmp     #NUM_ROWS
+    bcc     .validRow0
+    dey
+    bne     .randomRow0
+    lsr
+.validRow0
+    sta     .row0
+    tax
+; determine row 1:
+    ldy     #1                  ; 2 tries, 9/16 ok, 7/16*9/16 ok
+.randomRow1
+    jsr     NextRandom          ; TODO: improve
+    and     #$0f
+    cmp     #NUM_ROWS
+    bcc     .validRow1
+    dey
+    bpl     .randomRow1
+    lsr
+.validRow1
+    cmp     .row0
+    beq     .randomRow1
+    tay
+    lda     RowOfs,y
+    tay
+    txa
+    lda     RowOfs,x
+    tax
+    lda     #NUM_COLS-1
+    sta     .count
+.loopSwapRows
+    lda     colorLst_R,y
+    pha
+    lda     colorLst_R,x
+    sta     colorLst_W,y
+    pla
+    sta     colorLst_W,x
+    inx
+    iny
+    dec     .count
+    bpl     .loopSwapRows
 .skipSwapRows
 
 .skipApplyObst
@@ -1202,10 +1348,11 @@ MAX_VAL_DIFF    = $02
 TIM_OVE ; 1870
     jmp     MainLoop
 
+
 ;---------------------------------------------------------------
 ScrollCells SUBROUTINE
 ;---------------------------------------------------------------
-    START_TMP
+    START_TMP TMP_BASE
 .yEnd       .byte
     END_TMP
 
@@ -1612,138 +1759,6 @@ SaveLeftColumn
     bpl     .loopSave
     rts
 
-SwapRows SUBROUTINE
-    START_TMP
-.row0       ds 1
-.count      ds 1
-    END_TMP
-; determine row 0:
-    ldy     #2                  ; 2 tries, 9/16 ok, 7/16*9/16 ok
-.randomRow0
-    jsr     NextRandom          ; TODO: improve
-    and     #$0f
-    cmp     #NUM_ROWS
-    bcc     .validRow0
-    dey
-    bne     .randomRow0
-    lsr
-.validRow0
-    sta     .row0
-    tax
-; determine row 1:
-    ldy     #1                  ; 2 tries, 9/16 ok, 7/16*9/16 ok
-.randomRow1
-    jsr     NextRandom          ; TODO: improve
-    and     #$0f
-    cmp     #NUM_ROWS
-    bcc     .validRow1
-    dey
-    bpl     .randomRow1
-    lsr
-.validRow1
-    cmp     .row0
-    beq     .randomRow1
-    tay
-    lda     RowOfs,y
-    tay
-    txa
-    lda     RowOfs,x
-    tax
-    lda     #NUM_COLS-1
-    sta     .count
-.loopSwap
-    lda     colorLst_R,y
-    pha
-    lda     colorLst_R,x
-    sta     colorLst_W,y
-    pla
-    sta     colorLst_W,x
-    inx
-    iny
-    dec     .count
-    bpl     .loopSwap
-.exit
-    rts
-
-SwapCols SUBROUTINE
-    START_TMP
-.col0       ds 1
-    END_TMP
-; determine col 0:
-    ldy     #2                  ; 2 tries, 9/16 ok, 7/16*9/16 ok
-.randomCol0
-    jsr     NextRandom          ; TODO: improve
-    and     #$0f
-    cmp     #NUM_COLS
-    bcc     .validCol0
-    dey
-    bne     .randomCol0
-    lsr
-.validCol0
-    sta     .col0
-    tax
-; determine col 1:
-    ldy     #1                  ; 2 tries, 9/16 ok, 7/16*9/16 ok
-.randomCol1
-    jsr     NextRandom          ; TODO: improve
-    and     #$0f
-    cmp     #NUM_COLS
-    bcc     .validCol1
-    dey
-    bpl     .randomCol1
-    lsr
-.validCol1
-    cmp     .col0
-    beq     .randomCol1
-    tay
-    clc
-; TODO?: maybe use pointers here (faster but probably more code)
-.loopSwap
-    lda     colorLst_R,y
-    pha
-    lda     colorLst_R,x
-    sta     colorLst_W,y
-    pla
-    sta     colorLst_W,x
-    txa
-    adc     #NUM_COLS
-    tax
-    tya
-    adc     #NUM_COLS
-    tay
-    cmp     #NUM_CELLS
-    bcc     .loopSwap
-.exit
-    rts
-
-ScrollMask = . - 1
-    .byte   %01, %01, %11
-DirOfs = . - 1
-    .byte   %10, 0, 0
-DirBits
-    .byte   %11110111           ; column up
-    .byte   %11101111           ; column down
-    .byte   %01011111           ; row left
-    .byte   %00111111           ; row right
-RowOfs
-_VAL SET 0
-  REPEAT NUM_ROWS
-    .byte   _VAL
-_VAL SET _VAL + NUM_COLS
-  REPEND
-ColOfsD
-_VAL SET 0
-  REPEAT NUM_COLS
-    .byte   _VAL
-_VAL SET _VAL + 1
-  REPEND
-ColOfsU
-_VAL SET NUM_CELLS-NUM_COLS
-  REPEAT NUM_COLS
-    .byte   _VAL
-_VAL SET _VAL + 1
-  REPEND
-
 ;---------------------------------------------------------------
 GetRandomCellIdx SUBROUTINE
 ;---------------------------------------------------------------
@@ -1766,38 +1781,6 @@ GetRandomCellIdx SUBROUTINE
     lda     colorLst_R,x    ; EMPTY_COL?
     beq     .repeatRandom
     rts
-
-IndexTbl
-    .byte   NUM_CELLS/2-NUM_COLS-1
-    .byte   NUM_CELLS/2-NUM_COLS
-    .byte   NUM_CELLS/2-NUM_COLS+1
-    .byte   NUM_CELLS/2-1
-    .byte   NUM_CELLS/2
-    .byte   NUM_CELLS/2+1
-    .byte   NUM_CELLS/2+NUM_COLS-1
-    .byte   NUM_CELLS/2+NUM_COLS
-    .byte   NUM_CELLS/2+NUM_COLS+1
-INDEX_LEN = . - IndexTbl
-
-VolumeTbl
-    .byte   0
-    ds      8, 1
-    ds      4, 2
-    ds      2, 3
-    ds      2, 4
-    .byte   5, 6, 7, 8, 9, 10
-FOUND_SOUND_LEN = . - VolumeTbl
-    ds      4, 2
-    ds      2, 3
-    ds      2, 4
-    .byte   5, 6, 7, 8, 9, 10
-    ds      4, 2
-    ds      2, 3
-    ds      2, 4
-    .byte   5, 6, 7, 8, 9, 10
-BONUS_SOUND_LEN = . - VolumeTbl
-
-TICK_SOUND_LEN  = 1
 
 ;---------------------------------------------------------------
 GameInit SUBROUTINE
@@ -1905,7 +1888,7 @@ InitColors
 ;    adc     #ROUND_CELLS
     sta     cellCnt
 
-    jsr     GetRandomCellIdx
+    jsr     GetRandomCellIdx    ; extra stack usage
     sta     targetColor
     rts
 ; /GameInit
@@ -2248,6 +2231,66 @@ HmTbl = . - $f1
     .byte   $60, $50, $40, $30, $20, $10, $00
     .byte   $f0, $e0, $d0, $c0, $b0, $a0, $90, $80
 
+ScrollMask = . - 1
+    .byte   %01, %01, %11
+DirOfs = . - 1
+    .byte   %10, 0, 0
+DirBits
+    .byte   %11110111           ; column up
+    .byte   %11101111           ; column down
+    .byte   %01011111           ; row left
+    .byte   %00111111           ; row right
+RowOfs
+_VAL SET 0
+  REPEAT NUM_ROWS
+    .byte   _VAL
+_VAL SET _VAL + NUM_COLS
+  REPEND
+ColOfsD
+_VAL SET 0
+  REPEAT NUM_COLS
+    .byte   _VAL
+_VAL SET _VAL + 1
+  REPEND
+ColOfsU
+_VAL SET NUM_CELLS-NUM_COLS
+  REPEAT NUM_COLS
+    .byte   _VAL
+_VAL SET _VAL + 1
+  REPEND
+
+IndexTbl
+    .byte   NUM_CELLS/2-NUM_COLS-1
+    .byte   NUM_CELLS/2-NUM_COLS
+    .byte   NUM_CELLS/2-NUM_COLS+1
+    .byte   NUM_CELLS/2-1
+    .byte   NUM_CELLS/2
+    .byte   NUM_CELLS/2+1
+    .byte   NUM_CELLS/2+NUM_COLS-1
+    .byte   NUM_CELLS/2+NUM_COLS
+    .byte   NUM_CELLS/2+NUM_COLS+1
+INDEX_LEN = . - IndexTbl
+
+VolumeTbl
+    .byte   0
+    ds      8, 1
+    ds      4, 2
+    ds      2, 3
+    ds      2, 4
+    .byte   5, 6, 7, 8, 9, 10
+FOUND_SOUND_LEN = . - VolumeTbl
+    ds      4, 2
+    ds      2, 3
+    ds      2, 4
+    .byte   5, 6, 7, 8, 9, 10
+    ds      4, 2
+    ds      2, 3
+    ds      2, 4
+    .byte   5, 6, 7, 8, 9, 10
+BONUS_SOUND_LEN = . - VolumeTbl
+
+TICK_SOUND_LEN  = 1
+
 BcdTab  ; 5 entries work up to 79 (79 / 16 = 4.93)
     .byte $00, $06, $12, $18, $24;, $30, $36
 
@@ -2286,28 +2329,30 @@ NUM_ROUNDS = . - RoundLen
 
   IF 1 ; {
 RoundFlags
-    .byte   KEEP_CELLS
-    .byte   KEEP_CELLS |SWAP_FOUND
-    .byte   KEEP_CELLS |SWAP_FOUND|SCROLL_COLS
-    .byte   KEEP_CELLS |           SCROLL_COLS|SCROLL_ROWS
-    .byte   KEEP_CELLS |                       SCROLL_ROWS|SWAP_COLS
-    .byte   KEEP_CELLS |                                   SWAP_COLS|SWAP_ROWS  ; 5
-    .byte   BLOCK_EMPTY|SWAP_FOUND
-    .byte   BLOCK_EMPTY|SCROLL_COLS
-    .byte   BLOCK_EMPTY|SCROLL_ROWS
-    .byte   BLOCK_EMPTY|SWAP_COLS
-    .byte   BLOCK_EMPTY|SWAP_ROWS
-    .byte   BURN_EMPTY |SWAP_FOUND
-    .byte   BURN_EMPTY |SCROLL_COLS
-    .byte   BURN_EMPTY |SCROLL_ROWS
-    .byte   BURN_EMPTY |SWAP_COLS
-    .byte   BURN_EMPTY |SWAP_ROWS
+    .byte   KEEP_CELLS                                                          ; 0     ordered
+    .byte   KEEP_CELLS |SWAP_FOUND                                              ; 1     some mess
+    .byte   KEEP_CELLS |SWAP_FOUND|SCROLL_COLS                                  ; 2     more mess
+    .byte   KEEP_CELLS |                                   SWAP_COLS|SWAP_ROWS  ; 3     some order
+    .byte   KEEP_CELLS |           SCROLL_COLS|SCROLL_ROWS                      ; 4     very messy
+    .byte   KEEP_CELLS |                       SCROLL_ROWS|SWAP_COLS            ; 5     very messy
+
+    .byte   BLOCK_EMPTY|SWAP_FOUND                                              ; 6     some mess
+    .byte   BLOCK_EMPTY|           SCROLL_COLS                                  ; 7     some order
+    .byte   BLOCK_EMPTY|                       SCROLL_ROWS                      ; 8     some order
+    .byte   BLOCK_EMPTY|                                   SWAP_COLS            ; 9     some order
+    .byte   BLOCK_EMPTY|                                             SWAP_ROWS  ;10     some order
+
+    .byte   BURN_EMPTY |SWAP_FOUND                                              ;11
+    .byte   BURN_EMPTY |           SCROLL_COLS
+    .byte   BURN_EMPTY |                       SCROLL_ROWS
+    .byte   BURN_EMPTY |                                   SWAP_COLS
+    .byte   BURN_EMPTY |                                             SWAP_ROWS  ;15
 ; TODO: random from here (1 x KEEP|BLOCK|BURN, 2..5 x others)
 NUM_ROUNDS = . - RoundFlags
 RoundLen
     .byte   12, 14, 16, 18, 20, 22
-    .byte   35, 38, 41, 44, 47              ; BLOCK (too short?)
-    .byte   50, 53, 56, 57, 60              ; BURN
+    .byte   35, 37, 39, 41, 43              ; BLOCK (too short?)
+    .byte   47, 50, 53, 54, 57              ; BURN
 NUM_ROUNDS = . - RoundLen
    ENDIF ;}
 
