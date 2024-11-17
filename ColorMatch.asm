@@ -3,13 +3,13 @@
 
 ; Ideas:
 ; - game play:
-;   o remove found cells, either block or fall into
-;   o swap found cells
-;   - swap random cells/rows/columns
-;   - remove random cells (blocking), keep path?
+;   + remove found cells, either block or fall into
+;   + swap found cells
+;   + swap random cells/rows/columns
+;   ? remove random cells (blocking), keep path?
 ;   x automatically move whole screen and/or random/specific rows/columns
-;   - require a button press, indicated with ? or ! on central sprite
-;   - multiple levels
+;   ? require a button press, indicated with ? or ! on central sprite
+;   o multiple levels
 ;     - 1 ordered
 ;     - 2 roll columns with time
 ;     - 2 roll rows with time
@@ -29,9 +29,7 @@
 ; - better randomization
 ; o reset switch
 ; - use SELECT
-; - pause at end of round
-; - swap rows/cols
-; - lose life energy based on color difference ("Chameleon")
+; - check round bouns score conversion
 
 ; DONEs:
 ; + game variations:
@@ -43,10 +41,13 @@
 ; + timer bar below main kernel
 ; + score position below
 ; + hue delta tbl
-; + progress bar
+; + round progress bar
+; + swap rows/cols
+; + lose life energy based on color difference ("Chameleon")
+; + pause at end of round
+; + game over (with sound)
 
-
-START_ROUND     = 3 ; NUM_ROUNDS-1
+START_ROUND     = 5 ; NUM_ROUNDS-1
 
 ;===============================================================================
 ; A S S E M B L E R - S W I T C H E S
@@ -125,22 +126,26 @@ CELL_BONUS      = (MAX_TIMER * 20 + 50) / 100                   ; 20%
 ROUND_BONUS     = (MAX_TIMER * 50 + 50) / 100                   ; 50%
 TIMER_SPEED     = (256 * MAX_TIMER + (60 * 25) / 2) / (60 * 25) ; 25 seconds
 
-DIGIT_BYTES     = 6
+NUM_DIGITS      = 3
+DIGIT_BYTES     = NUM_DIGITS * 2
 NUM_TMPS        = DIGIT_BYTES * 2   ; 12
 
 ; gameState flags:
 GAME_RUNNING    = 1 << 7
+ROUND_DONE      = 1 << 6
+;...
+GAME_OVER       = 1 << 0
 
 ; roundFlags constants:
 ; any of these 5, values and their order must NOT be changed! (see apply obstacles)
 SCROLL_ROWS     = 1 << 0    ; affects 13 cells
-SCROLL_COLS     = 1 << 1    ; affects  9 cells,
+SCROLL_COLS     = 1 << 1    ; affects  9 cells
 SWAP_FOUND      = 1 << 2    ; affects  2 cells (easiest)
 SWAP_COLS       = 1 << 3    ; affects 18 cells
 SWAP_ROWS       = 1 << 4    ; affects 26 cells
 ; SWAP and SCROLL mixed creates a mess!
 ; only one of these 3:
-KEEP_CELLS      = 1 << 5
+KEEP_CELLS      = 1 << 5    ; TODO: superfluous, could be used for something else
 BURN_EMPTY      = 1 << 6
 BLOCK_EMPTY     = 1 << 7
 
@@ -832,11 +837,25 @@ VerticalBlank SUBROUTINE
 .skipReset
 .tmpSwchA   = tmpVars
 
-    lda     gameState                   ; GAME_RUNNING?
+    bit     gameState                   ; GAME_RUNNING?
     bmi     .checkInput
-    bit     INPT4
+    lda     soundIdx0
+    bne     .contStopped
+DEBUG1
+    bvs     .roundDone                  ; ROUND_DONE!
+    ldx     INPT4
     bmi     .contStopped
-    ora     #GAME_RUNNING
+    lda     gameState
+    lsr
+    lda     #GAME_RUNNING
+    bcc     .startRound
+    jsr     GameInit
+    jmp     .startRound
+
+.roundDone
+    jsr     NextRound
+    lda     #0
+.startRound
     sta     gameState
 .contStopped
     jmp     .skipRunning
@@ -984,6 +1003,16 @@ TIM_OVS
     lda     timerHi
     beq     .skipTimerHi
     dec     timerHi
+    bne     .skipTimerHi
+    lda     #GAME_OVER
+    sta     gameState
+; play end of game sound
+    lda     #BONUS_SOUND_LEN
+    sta     soundIdx0
+    lda     #$2
+    sta     AUDC0
+;    lda     #$2
+    sta     AUDF0
 .skipTimerHi
 
 ; check for color match (TODO: can be done every 2nd frame)
@@ -1042,8 +1071,10 @@ MAX_VAL_DIFF    = $02
     bne     .skipNewCol                 ;  no, no match
 .foundTargetCol
     lda     roundFlags
-    and     #KEEP_CELLS
-    bne     .skipEmpty
+;    and     #KEEP_CELLS
+;    bne     .skipEmpty
+    and     #BLOCK_EMPTY|BURN_EMPTY     ; instead of !KEEP_CELLS
+    beq     .skipEmpty
     lda     #EMPTY_COL
     sta     colorLst_W+NUM_CELLS/2
 .skipEmpty
@@ -1061,11 +1092,20 @@ MAX_VAL_DIFF    = $02
     sta     AUDF0
 ; add extra time:
     lda     #CELL_BONUS
-    jsr     AddTimer
     dec     cellCnt
     bne     .skipNextRound
-    jsr     NextRound
+    lda     #$04
+    sta     AUDC0
+    lda     #$0a
+    sta     AUDF0
+    lda     #BONUS_SOUND_LEN
+    sta     soundIdx0
+    lda     #ROUND_DONE             ; remove GAME_RUNNING
+    sta     gameState
+DEBUG0
+    lda     #ROUND_BONUS+CELL_BONUS ; = 106!!! TODO
 .skipNextRound
+    jsr     AddTimer
 
 .skipNewCol
 
@@ -1795,10 +1835,8 @@ GameInit SUBROUTINE
     lda     INTIM
     sta     randomLo
 
-    lda     #START_ROUND
-    sta     round
-
-    lda     #MAX_TIMER-ROUND_BONUS
+    ldx     #START_ROUND
+    lda     #MAX_TIMER
     sta     timerHi
     bne     .contInitGame
 
@@ -1809,24 +1847,22 @@ NextRound
     bcc     .roundOk
     ldx     #NUM_ROUNDS-4
 .roundOk
-    stx     round
 .contInitGame
-    lda     #ROUND_BONUS
-    jsr     AddTimer
-    ldx     #0
-    stx     timerLo
-    stx     frameCnt
-    stx     obstSum
+    stx     round
+
+    lda     #0
+    ldx     #NUM_DIGITS-1
+.loopClear
+    sta     scoreLst,x
+    dex
+    bpl     .loopClear
+
+    sta     timerLo
+    sta     frameCnt
+    sta     obstSum
 
     asl     gameState           ; remove GAME_RUNNING flag
     lsr     gameState
-
-    lda     #$04
-    sta     AUDC0
-    lda     #$0a
-    sta     AUDF0
-    lda     #BONUS_SOUND_LEN
-    sta     soundIdx0
 
 InitColors
     START_TMP
@@ -1883,12 +1919,10 @@ InitColors
     lda     RoundFlags,y
     sta     roundFlags
     lda     RoundLen,y
-;    tya
-;    clc
-;    adc     #ROUND_CELLS
     sta     cellCnt
 
-    jsr     GetRandomCellIdx    ; extra stack usage
+
+    jsr     GetRandomCellIdx    ; extra stack usage only here!
     sta     targetColor
     rts
 ; /GameInit
@@ -2291,8 +2325,8 @@ BONUS_SOUND_LEN = . - VolumeTbl
 
 TICK_SOUND_LEN  = 1
 
-BcdTab  ; 5 entries work up to 79 (79 / 16 = 4.93)
-    .byte $00, $06, $12, $18, $24;, $30, $36
+BcdTab  ; 7 entries (works up to 99)
+    .byte $00, $06, $12, $18, $24, $30, $36
 
   IF 0 ;{
 RoundFlags
@@ -2329,6 +2363,7 @@ NUM_ROUNDS = . - RoundLen
 
   IF 1 ; {
 RoundFlags
+; TODO: define and order the rounds by difficulty
     .byte   KEEP_CELLS                                                          ; 0     ordered
     .byte   KEEP_CELLS |SWAP_FOUND                                              ; 1     some mess
     .byte   KEEP_CELLS |SWAP_FOUND|SCROLL_COLS                                  ; 2     more mess
