@@ -1,7 +1,5 @@
-; Color-Match
+; ColorMatch
 ; (C) 2024 Thomas Jentzsch
-
-; Bug: ScrollLeft, bottom row
 
 ; Ideas:
 ; - game play:
@@ -9,7 +7,7 @@
 ;   o swap found cells
 ;   - swap random cells/rows/columns
 ;   - remove random cells (blocking), keep path?
-;   - automatically move whole screen and/or random/specific rows/columns
+;   x automatically move whole screen and/or random/specific rows/columns
 ;   - require a button press, indicated with ? or ! on central sprite
 ;   - multiple levels
 ;     - 1 ordered
@@ -24,7 +22,6 @@
 ;     - 8 swap found cells
 ;     - 9 remove found cells (deadly)
 ;     -10 require confirmation
-
 ; - reduce to 11 columns to get one sprite back
 
 ; TODOs:
@@ -33,6 +30,7 @@
 ; - use SELECT
 ; - pause at end of round
 ; - swap rows/cols
+; - lose life energy based on color difference ("Chameleon")
 
 ; DONEs:
 ; + game variations:
@@ -47,7 +45,7 @@
 ; + progress bar
 
 
-START_ROUND     = NUM_ROUNDS-1
+START_ROUND     = 7; NUM_ROUNDS-1
 
 ;===============================================================================
 ; A S S E M B L E R - S W I T C H E S
@@ -56,13 +54,13 @@ START_ROUND     = NUM_ROUNDS-1
 VERSION         = $0020
 BASE_ADR        = $f000
 
-  IFNCONST TV_MODE ; manually defined here
+  IFNCONST TV_MODE  ; manually defined here
 NTSC            = 0
 PAL60           = 1
 PAL50           = 0
   ENDIF
 
-F8SC            = 1     ; create F8SC instead of 4KSC (for Harmony)
+F8SC            = 1 ; create F8SC instead of 4KSC (for Harmony)
 
 ILLEGAL         = 1
 DEBUG           = 1
@@ -73,6 +71,7 @@ SAVEKEY         = 0 ; (-~220) support high scores on SaveKey
 PLUSROM         = 0 ; (-~50)
 
 RM_LEAD_0       = 1
+
 
 ;===============================================================================
 ; I N C L U D E S
@@ -93,7 +92,7 @@ RM_LEAD_0       = 1
   IF NTSC_COL
 BLACK2          = BLACK
   ELSE
-BLACK2          = BLACK+2
+BLACK2          = BLACK+2   ; black is darker in PAL
   ENDIF
 
 TIMER_COL       = GREEN+$8  ;BLUE_CYAN+$c
@@ -141,7 +140,7 @@ KEEP_CELLS      = 1 << 5
 BURN_EMPTY      = 1 << 6
 BLOCK_EMPTY     = 1 << 7
 
-STACK_SIZE      = 9
+STACK_SIZE      = 4+2 ; 2 only used in InitGame/NextRound
 
 
 ;===============================================================================
@@ -158,16 +157,16 @@ tmpVars         ds NUM_TMPS
 randomLo        .byte
 randomHi        .byte
 
-gameState       .byte
+gameState       .byte           ; 1.......
 
 round           .byte
 roundFlags      .byte
-cellCnt         .byte
+cellCnt         .byte           ; number of remaing cells per round
 
-targetCol       .byte
+targetColor     .byte
 
 moveSum         .byte           ; joystick directional input delay counter
-obstSum         .byte
+obstSum         .byte           ; obstacle delay counter
 
 soundIdx0       .byte
 soundIdx1       .byte
@@ -345,11 +344,11 @@ DrawKernel SUBROUTINE
 .digitPtr1  = .digitPtrLst+10
     END_TMP
     START_TMP tmpVars + DIGIT_BYTES
-.rowCount   ds 1
-.colorPtr   ds 2
-.targetCol  ds 1
-.tmpColP0   ds 1
-.tmpColP1   ds 1
+.rowCount       ds 1
+.colorPtr       ds 2
+.targetColor    ds 1
+.tmpColP0       ds 1
+.tmpColP1       ds 1
     END_TMP
 .cursorPF2  = $fd   ; TODO
 
@@ -428,20 +427,18 @@ TIM_DIGITS_END
     lda     #BLACK
     bit     gameState
     bpl     .skipRunning
-    lda     targetCol
+    lda     targetColor
     ldx     #%11110110
 .skipRunning
-    sta     .targetCol
+    sta     .targetColor
     stx     .cursorPF2
 
-    ldx     #227+1
 .waitTim
     lda     INTIM
     bne     .waitTim
     sta     WSYNC
 ;---------------------------------------
-    sta     VBLANK
-    stx     TIM64T              ;  =  7
+    sta     VBLANK              ; 3 =  3
 
     lda     #%111               ; 2
     sta     NUSIZ0              ; 3
@@ -453,7 +450,7 @@ TIM_DIGITS_END
     lda     #%11011011          ; 2
     sta     PF1                 ; 3
     asl                         ; 2         #%10110110
-    SLEEP   7
+    SLEEP   11
     sta     RESP0               ; 3 = 10    @42
     ldx     #<colorLst_R + NUM_COLS * (NUM_ROWS - 1); 2
     sta     PF2                 ; 3
@@ -496,7 +493,7 @@ WaitGap
     jsr     EnterKernel         ;           @08
     sty     COLUPF              ;           Y = 0
     sty     GRP1
-    lda     .targetCol
+    lda     .targetColor
     sta     COLUP0
 ; enable target cursor:
     ldx     #%10110110
@@ -689,12 +686,12 @@ WaitBar
 ;---------------------------------------
     stx     PF0                 ; 3         @01
     sta     NUSIZ1              ; 3         @04
-    sty     COLUP1              ; 3 =  6    @07
+    sty     COLUP1              ; 3 =  9    @07
 
     stx     ENABL               ; 3
-    stx     COLUBK              ; 3         @10
-    lda     #BROWN|$e
-    sta     COLUPF              ; 3 =  9    @13
+    stx     COLUBK              ; 3         @13
+    lda     #BROWN|$e           ; 2
+    sta     COLUPF              ; 3 = 11    @18
 
     ldx     #DIGIT_BYTES-1      ; 2
     ldy     #DIGIT_BYTES*2-2    ; 2 =  4
@@ -719,52 +716,48 @@ WaitBar
     sta     .digitPtr4+1        ; 3
     sta     .digitPtr5+1        ; 3 = 20    @66
 
-    ldy     #FONT_H-1           ; 2
+    ldy     #FONT_H             ; 2 =  2
 .loopScore
     lda     (.digitPtr0),y      ; 5
     sta     WSYNC               ; 3 =  8
 ;---------------------------------------
     sta     HMOVE               ; 3
-    SLEEP   2
+    dey                         ; 2
     sta     ENABL               ; 3
     lda     (.digitPtr1),y      ; 5
     sta     GRP0                ; 3
     lda     (.digitPtr2),y      ; 5
-    sta     GRP1                ; 3 = 22
+    sta     GRP1                ; 3 = 24
     lax     (.digitPtr5),y      ; 5
     txs                         ; 2
     lax     (.digitPtr3),y      ; 5
     lda     (.digitPtr4),y      ; 5
-    stx     GRP0                ; 3 = 20
-    sta     GRP1                ; 3
+    stx     GRP0                ; 3 = 20    @44
+    sta     GRP1                ; 3         @47
     tsx                         ; 2
-    stx     GRP0                ; 3
-    sta     GRP1                ; 3
+    stx     GRP0                ; 3         @52
+    sta     GRP1                ; 3         @55
     sta     HMCLR               ; 3
-    dey                         ; 2
-    bpl     .loopScore          ; 3/2=19
-    iny
-    sty     ENABL
-    sty     GRP0
-    sty     GRP1
-;    sty     GRP0
-    sty     VDELP0
-    sty     VDELP1
-    sty     COLUPF
+    tya                         ; 2
+    bne   .loopScore            ; 3/2=19    @63/62
+    sty     ENABL               ; 3
+    sty     GRP0                ; 3
+    sty     GRP1                ; 3
+;    sty     GRP0                ; 3
+    sty     VDELP0              ; 3
+    sty     VDELP1              ; 3
+    sty     COLUPF              ; 3 = 18    @04
 
-    ldx     #2
-.waitScreen
-    lda     INTIM
-    bne     .waitScreen
-    sta     WSYNC
-;---------------------------------------
-    stx     VBLANK
+    lda     #2
+;    sta     WSYNC
+;;---------------------------------------
+    sta     VBLANK
     ldx     #$ff
     txs
     jmp     ContKernel
 ; /DrawKernel
 
-KernelCode ; patched into
+KernelCode ; copied into RAM and patched there
     KERNEL_CODE
 
     ALIGN_FREE_LBL   256, "PatchTbl"
@@ -819,7 +812,7 @@ VerticalBlank SUBROUTINE
     inc     frameCnt
 
   IF NTSC_TIM
-    lda     #44-4+4         ; 38*64 = 2432
+    lda     #44-4+4 +1        ; 38*64 = 2432
   ELSE
     lda     #77
   ENDIF
@@ -900,18 +893,84 @@ TIM_OVS
     jmp     .skipRunning
 
 .contRunning
-    lda     #TIMER_SPEED
+; update timer:
+    START_TMP
+.hueDiff    ds 1
+.tmpVal     ds 1
+    END_TMP
+
+    lda     colorLst_R+NUM_CELLS/2
+    bne     .calcDiff
     bit     roundFlags                  ; BURN_EMPTY?
-    bvc     .skipBurn
-    ldx     colorLst_R+NUM_CELLS/2
-    bne     .skipBurn
-    stx     AUDF1
+    bvc     .calcDiff0
+    lda     soundIdx1
+    bne     .skipBurnSound
+    sta     AUDF1
+    lda     #$4
+    sta     AUDV1
     lda     #$08
     sta     AUDC1
 ;    lda     #10
-    sta     soundIdx1
-    lda     #TIMER_SPEED * 8
-.skipBurn
+;    lda     #1
+    inc     soundIdx1
+.skipBurnSound
+    lda     #TIMER_SPEED * 8            ; 26 * 8 = 208
+    bne     .contBurn
+
+; calculate hue difference:
+.calcDiff0
+    lda     #8
+    bne     .contBurn
+                                        ; TODO: diff on empty cell?
+.calcDiff
+    lsr
+    lsr
+    lsr
+    lsr
+    tay
+    lda     targetColor
+    lsr
+    lsr
+    lsr
+    lsr
+    tax
+    lda     HueIdx,x
+    sec
+    sbc     HueIdx,y
+    bcs     .posHueDiff
+    eor     #$ff
+    adc     #1
+    sta     .hueDiff
+.posHueDiff
+    cmp     #NUM_COLS/2+1
+    bcc     .hueOk
+    eor     #$ff
+    adc     #NUM_COLS+1-1
+.hueOk
+;    sta     scoreLo
+    sta     .hueDiff
+; calculate value difference:
+    lda     colorLst_R+NUM_CELLS/2
+    and     #$0f
+    sta     .tmpVal
+    lda     targetColor
+    and     #$0f
+    sec
+    sbc     .tmpVal
+    bcs     .posValDiff
+    eor     #$ff
+    adc     #1
+.posValDiff
+    lsr
+.wait4ever
+    bcs     .wait4ever
+;    sta     scoreMid
+;    clc
+    adc     .hueDiff                    ; 1..6+7 = 1..13 (current 26)
+    asl                                 ; 2..26
+    asl                                 ; 4..52
+;    adc     #12
+.contBurn
     clc
     adc     timerLo
     sta     timerLo
@@ -926,7 +985,7 @@ TIM_OVS
     bpl     .coarseCheck
     ldx     #NUM_CELLS/2
     lda     colorLst_R+NUM_CELLS/2
-    cmp     targetCol
+    cmp     targetColor
     beq     .foundTargetCol
     jmp     .skipNewCol
 
@@ -938,7 +997,7 @@ MAX_VAL_DIFF    = $02
 
 ; compare hue:
 .checkHue
-    lda     targetCol
+    lda     targetColor
     lsr
     lsr
     lsr
@@ -961,7 +1020,7 @@ MAX_VAL_DIFF    = $02
 
 ; compare value:
 .checkRangeValue    ; hue is the same
-    lda     targetCol
+    lda     targetColor
     sec
     sbc     colorLst_R+NUM_CELLS/2
     clc
@@ -971,7 +1030,7 @@ MAX_VAL_DIFF    = $02
     bcc     .foundTargetCol             ;  yes, match!
 
 .checkSameValue
-    lda     targetCol
+    lda     targetColor
     eor     colorLst_R+NUM_CELLS/2
     and     #$0f
     bne     .skipNewCol                 ;  no, no match
@@ -983,7 +1042,7 @@ MAX_VAL_DIFF    = $02
     sta     colorLst_W+NUM_CELLS/2
 .skipEmpty
     jsr     GetRandomCellIdx
-    sta     targetCol
+    sta     targetColor
 ; increase score:
     lda     #$50
     jsr     AddScore0
@@ -1016,20 +1075,17 @@ MAX_VAL_DIFF    = $02
     adc     #OBST_SPPED
     sta     obstSum
     bcc     .skipApplyObstJmp
-;    lda     frameCnt
-;    and     #$3f
-;    bne     .skipApplyObst
 ; check for scrolling
     lda     roundFlags
-    and     #SWAP_FOUND|SCROLL_ROWS|SCROLL_COLS
-    beq     .skipApplyObst
-    ldx     soundIdx1
-    bne     .skipTick
+    and     #SWAP_FOUND|SCROLL_COLS|SCROLL_ROWS|SWAP_COLS|SWAP_ROWS
+    beq     .skipApplyObstJmp
+;    ldx     soundIdx1
+;    bne     .skipTick
     ldx     #TICK_SOUND_LEN
     stx     soundIdx1
     ldx     #$08
     stx     AUDC1
-    ldx     #$04
+    ldx     #$06
     stx     AUDV1
 .skipTick
     and     #SCROLL_ROWS|SCROLL_COLS
@@ -1098,7 +1154,7 @@ MAX_VAL_DIFF    = $02
     END_TMP
     lda     roundFlags
     and     #SWAP_FOUND
-    beq     .skipSwap
+    beq     .skipSwapCells
     jsr     GetRandomCellIdx
     stx     .xCell0
     jsr     GetRandomCellIdx
@@ -1109,7 +1165,20 @@ MAX_VAL_DIFF    = $02
     sta     colorLst_W,x
     pla
     sta     colorLst_W,y
-.skipSwap
+.skipSwapCells
+
+    lda     roundFlags
+    and     #SWAP_COLS
+    beq     .skipSwapCols
+    jsr     SwapCols
+.skipSwapCols
+
+    lda     roundFlags
+    and     #SWAP_ROWS
+    beq     .skipSwapRows
+    jsr     SwapRows
+.skipSwapRows
+
 .skipApplyObst
 
 .skipRunning
@@ -1124,8 +1193,9 @@ MAX_VAL_DIFF    = $02
 ; continue sound 1:
     ldy     soundIdx1
     beq     .skipSound1
-    ldy     #8
+;    ldy     #8
     dec     soundIdx1
+    NOP_W
 .skipSound1
     sty     AUDV1
 
@@ -1156,7 +1226,7 @@ ScrollCells SUBROUTINE
     lda     roundFlags                  ;           BLOCK_FLAG?
     bpl     .skipBlockR
     lda     colorLst_R+NUM_CELLS/2-1    ;           EMPTY_COL?
-    beq     .skipDirsJmp
+    beq     .exit
 .skipBlockR
   ENDIF
     ldy     #NUM_CELLS
@@ -1187,9 +1257,8 @@ ScrollCells SUBROUTINE
     bne     .loopRowsR
 TIM_R
 ; 2005 cycles
-    nop
-.skipDirsJmp
-    jmp     .skipDirs
+.exit
+    rts
 
 ;---------------------------------------------------------------
 .downR
@@ -1198,7 +1267,7 @@ TIM_R
     lda     roundFlags                  ;           BLOCK_FLAG?
     bpl     .skipBlockDR
     lda     colorLst_R+NUM_CELLS/2+NUM_COLS-1   ;   EMPTY_COL?
-    beq     .skipDirsJmp
+    beq     .exit
 .skipBlockDR
   ENDIF
     jsr     SaveRightColumn
@@ -1234,7 +1303,7 @@ TIM_DR
     lda     roundFlags
     bpl     .skipBlockUR
     lda     colorLst_R+NUM_CELLS/2-NUM_COLS-1   ;   EMPTY_COL?
-    beq     .skipDirsJmp
+    beq     .exit
 .skipBlockUR
   ENDIF
     jsr     SaveRightColumn
@@ -1284,7 +1353,7 @@ TIM_UR
     lda     roundFlags
     bpl     .skipBlockL
     lda     colorLst_R+NUM_CELLS/2+1    ;           EMPTY_COL?
-    beq     .skipDirsJmp2
+    beq     .exit1
 .skipBlockL
   ENDIF
     ldy     #0
@@ -1314,7 +1383,8 @@ TIM_UR
     bcc     .loopRowsL
 TIM_L
 ; 2117 cycles (.loopColsL crosses page)
-    bcs     .skipDirsJmp2
+.exit1
+    rts
 
 .downL
 ; move cells down left:
@@ -1322,7 +1392,7 @@ TIM_L
     lda     roundFlags                  ;           BLOCK_FLAG?
     bpl     .skipBlockDL
     lda     colorLst_R+NUM_CELLS/2+NUM_COLS+1   ;   EMPTY_COL?
-    beq     .skipDirsJmp2
+    beq     .exit1
 .skipBlockDL
   ENDIF
     jsr     SaveLeftColumn
@@ -1366,9 +1436,7 @@ TIM_SLD
     bne     .loopLoadDown
 TIM_LD
 ; 172 cycles
-    nop
-.skipDirsJmp2
-    jmp     .skipDirs
+    rts
 
 ;---------------------------------------------------------------
 .upL
@@ -1377,7 +1445,7 @@ TIM_LD
     lda     roundFlags                  ;           BLOCK_FLAG?
     bpl     .skipBlockUL
     lda     colorLst_R+NUM_CELLS/2-NUM_COLS+1   ;   EMPTY_COL?
-    beq     .skipDirsJmp2
+    beq     .exit1
 .skipBlockUL
   ENDIF
     jsr     SaveLeftColumn
@@ -1422,8 +1490,7 @@ TIM_SLU
     sta     colorLst_W,y            ; 5         ...to bottom cell
 TIM_LU
 ; 172 cycles (1x unrolling saves 42 cycles)
-    bcs     .skipDirsJmp2
-    DEBUG_BRK
+    rts
 
 ;---------------------------------------------------------------
 .skipLeft
@@ -1436,7 +1503,7 @@ TIM_LU
     lda     roundFlags                  ;           BLOCK_FLAG?
     bpl     .skipBlockD
     lda     colorLst_R+NUM_CELLS/2+NUM_COLS     ;   EMPTY_COL?
-    beq     .skipDirs
+    beq     .exit2
 .skipBlockD
   ENDIF
     ldy     #NUM_COLS-1
@@ -1473,7 +1540,8 @@ TIM_LU
     bne     .loopColsD
 TIM_D
 ; 1845 cycles
-    beq     .skipDirs
+.exit2
+    rts
 ; (2534, 2222, 1897) 1819 cycles = ~23.9 scanlines
 
 ;---------------------------------------------------------------
@@ -1486,7 +1554,7 @@ TIM_D
     lda     roundFlags                  ;           BLOCK_FLAG?
     bpl     .skipBlockLU
     lda     colorLst_R+NUM_CELLS/2-NUM_COLS     ;   EMPTY_COL?
-    beq     .skipDirs
+    beq     .exit2
 .skipBlockLU
   ENDIF
     ldy     #NUM_CELLS-1
@@ -1522,10 +1590,7 @@ TIM_D
     bne     .loopColsU
 TIM_U
 ; 1826 cycles
-    nop
-;    jmp     .skipDirs
 .skipUp
-.skipDirs
     rts
 
 ;---------------------------------------------------------------
@@ -1545,6 +1610,110 @@ SaveLeftColumn
     tay
     dex
     bpl     .loopSave
+    rts
+
+SwapRows SUBROUTINE
+    START_TMP
+.row0       ds 1
+.count      ds 1
+    END_TMP
+; determine row 0:
+    ldy     #2                  ; 2 tries, 9/16 ok, 7/16*9/16 ok
+.randomRow0
+    jsr     NextRandom          ; TODO: improve
+    and     #$0f
+    cmp     #NUM_ROWS
+    bcc     .validRow0
+    dey
+    bne     .randomRow0
+    lsr
+.validRow0
+    sta     .row0
+    tax
+; determine row 1:
+    ldy     #1                  ; 2 tries, 9/16 ok, 7/16*9/16 ok
+.randomRow1
+    jsr     NextRandom          ; TODO: improve
+    and     #$0f
+    cmp     #NUM_ROWS
+    bcc     .validRow1
+    dey
+    bpl     .randomRow1
+    lsr
+.validRow1
+    cmp     .row0
+    beq     .randomRow1
+    tay
+    lda     RowOfs,y
+    tay
+    txa
+    lda     RowOfs,x
+    tax
+    lda     #NUM_COLS-1
+    sta     .count
+.loopSwap
+    lda     colorLst_R,y
+    pha
+    lda     colorLst_R,x
+    sta     colorLst_W,y
+    pla
+    sta     colorLst_W,x
+    inx
+    iny
+    dec     .count
+    bpl     .loopSwap
+.exit
+    rts
+
+SwapCols SUBROUTINE
+    START_TMP
+.col0       ds 1
+    END_TMP
+; determine col 0:
+    ldy     #2                  ; 2 tries, 9/16 ok, 7/16*9/16 ok
+.randomCol0
+    jsr     NextRandom          ; TODO: improve
+    and     #$0f
+    cmp     #NUM_COLS
+    bcc     .validCol0
+    dey
+    bne     .randomCol0
+    lsr
+.validCol0
+    sta     .col0
+    tax
+; determine col 1:
+    ldy     #1                  ; 2 tries, 9/16 ok, 7/16*9/16 ok
+.randomCol1
+    jsr     NextRandom          ; TODO: improve
+    and     #$0f
+    cmp     #NUM_COLS
+    bcc     .validCol1
+    dey
+    bpl     .randomCol1
+    lsr
+.validCol1
+    cmp     .col0
+    beq     .randomCol1
+    tay
+    clc
+; TODO?: maybe use pointers here (faster but probably more code)
+.loopSwap
+    lda     colorLst_R,y
+    pha
+    lda     colorLst_R,x
+    sta     colorLst_W,y
+    pla
+    sta     colorLst_W,x
+    txa
+    adc     #NUM_COLS
+    tax
+    tya
+    adc     #NUM_COLS
+    tay
+    cmp     #NUM_CELLS
+    bcc     .loopSwap
+.exit
     rts
 
 ScrollMask = . - 1
@@ -1661,10 +1830,11 @@ NextRound
 .contInitGame
     lda     #ROUND_BONUS
     jsr     AddTimer
-    ldx     #255
+    ldx     #0
     stx     timerLo
-    inx
-    sta     frameCnt
+    stx     frameCnt
+    stx     obstSum
+
     asl     gameState           ; remove GAME_RUNNING flag
     lsr     gameState
 
@@ -1736,7 +1906,7 @@ InitColors
     sta     cellCnt
 
     jsr     GetRandomCellIdx
-    sta     targetCol
+    sta     targetColor
     rts
 ; /GameInit
 
@@ -1962,25 +2132,9 @@ _IDX    SET _IDX + 1
 
   IF NTSC_COL
 ColorTbl
-;    .byte   BROWN           ; $20
-;    .byte   ORANGE          ; $30
-;    .byte   RED             ; $40
-;    .byte   MAUVE           ; $50
-;    .byte   VIOLET          ; $60
-;    .byte   PURPLE          ; $70
-;    .byte   BLUE            ; $80
-;    .byte   BLUE_CYAN       ; $90
-;    .byte   CYAN            ; $a0
-;    .byte   CYAN_GREEN      ; $b0
-;;    .byte   GREEN           ; $c0
-;    .byte   GREEN_YELLOW    ; $d0
-;    .byte   GREEN_BEIGE     ; $e0
-;;    .byte   BEIGE           ; $f0
-;    .byte   YELLOW          ; $10
-
     .byte   YELLOW          ; $10
     .byte   BROWN           ; $20
-;    .byte   ORANGE          ; $30
+;    .byte   ORANGE          ; $30  skipped
     .byte   RED             ; $40
     .byte   MAUVE           ; $50
     .byte   VIOLET          ; $60
@@ -1992,13 +2146,12 @@ ColorTbl
     .byte   GREEN           ; $c0
     .byte   GREEN_YELLOW    ; $d0
     .byte   GREEN_BEIGE     ; $e0
-;    .byte   BEIGE           ; $f0
-;    .byte   YELLOW          ; $10
+;    .byte   BEIGE           ; $f0  skipped
 NUM_COLS    = . - ColorTbl  ; 13
 HueIdx = . - 1
     .byte   0       ; YELLOW          $10
     .byte   1       ; BROWN           $20
-                    ; (ORANGE)        $30
+    .byte   $ff     ; (ORANGE)        $30   skipped
     .byte   2       ; RED             $40
     .byte   3       ; MAUVE           $50
     .byte   4       ; VIOLET          $60
@@ -2011,7 +2164,7 @@ HueIdx = . - 1
     .byte   11      ; GREEN_YELLOW    $d0
     .byte   12      ; GREEN_BEIGE     $e0
                     ; (BEIGE)         $f0
-  ELSE
+  ELSE ; PAL
 PAL_WHITE   = BLACK+$10     ; $10
 ColorTbl
     .byte   YELLOW          ; $20
@@ -2100,57 +2253,25 @@ BcdTab  ; 5 entries work up to 79 (79 / 16 = 4.93)
 
   IF 0 ;{
 RoundFlags
-    .byte   0
-    .byte   KEEP_CELLS
-    .byte               SWAP_FOUND
-    .byte   KEEP_CELLS |SWAP_FOUND
-
-    .byte                          SCROLL_COLS
-    .byte   KEEP_CELLS |           SCROLL_COLS
-    .byte               SWAP_FOUND|SCROLL_COLS
-    .byte   KEEP_CELLS |SWAP_FOUND|SCROLL_COLS
-
-    .byte                                      SCROLL_ROWS
-    .byte   KEEP_CELLS |                       SCROLL_ROWS
-    .byte               SWAP_FOUND|            SCROLL_ROWS
-    .byte   KEEP_CELLS |SWAP_FOUND|            SCROLL_ROWS
-
-    .byte                          SCROLL_COLS|SCROLL_ROWS
-    .byte   KEEP_CELLS |           SCROLL_COLS|SCROLL_ROWS
-    .byte               SWAP_FOUND|SCROLL_COLS|SCROLL_ROWS
-    .byte   KEEP_CELLS |SWAP_FOUND|SCROLL_COLS|SCROLL_ROWS
-
-    .byte   BLOCK_EMPTY
-    .byte   BLOCK_EMPTY|SWAP_FOUND
-    .byte   BLOCK_EMPTY|           SCROLL_COLS
-    .byte   BLOCK_EMPTY|SWAP_FOUND|SCROLL_COLS
-    .byte   BLOCK_EMPTY|                       SCROLL_ROWS
-    .byte   BLOCK_EMPTY|SWAP_FOUND|            SCROLL_ROWS
-    .byte   BLOCK_EMPTY|           SCROLL_COLS|SCROLL_ROWS
-    .byte   BLOCK_EMPTY|SWAP_FOUND|SCROLL_COLS|SCROLL_ROWS
-NUM_ROUNDS = . - RoundFlags
-  ENDIF ;}
-  IF 1 ; {
-RoundFlags
-    .byte   0                                               ; 0
+    .byte   0                                                                   ; 0
     .byte   KEEP_CELLS
 
     .byte               SWAP_FOUND
     .byte   KEEP_CELLS |SWAP_FOUND
 
-    .byte   KEEP_CELLS |           SCROLL_COLS              ; 4
+    .byte   KEEP_CELLS |           SCROLL_COLS                                  ; 4
     .byte   KEEP_CELLS |SWAP_FOUND|SCROLL_COLS
 
     .byte   KEEP_CELLS |                       SCROLL_ROWS
     .byte   KEEP_CELLS |SWAP_FOUND|            SCROLL_ROWS
 
-    .byte   KEEP_CELLS |           SCROLL_COLS|SCROLL_ROWS  ; 8
+    .byte   KEEP_CELLS |           SCROLL_COLS|SCROLL_ROWS                      ; 8
     .byte   KEEP_CELLS |SWAP_FOUND|SCROLL_COLS|SCROLL_ROWS
 
-    .byte   BLOCK_EMPTY                                     ;10
-    .byte   BLOCK_EMPTY|SWAP_FOUND|SCROLL_COLS|SCROLL_ROWS  ;11
-    .byte   BURN_EMPTY                                      ;12
-    .byte   BURN_EMPTY |SWAP_FOUND|SCROLL_COLS|SCROLL_ROWS  ;13
+    .byte   BLOCK_EMPTY                                                         ;10
+    .byte   BLOCK_EMPTY|SWAP_FOUND|SCROLL_COLS|SCROLL_ROWS                      ;11
+    .byte   BURN_EMPTY                                                          ;12
+    .byte   BURN_EMPTY |SWAP_FOUND|SCROLL_COLS|SCROLL_ROWS                      ;13
 NUM_ROUNDS = . - RoundFlags
 RoundLen
     .byte   20, 25
@@ -2160,6 +2281,33 @@ RoundLen
     .byte   35, 40
     .byte   45, 50
     .byte   55, 60
+NUM_ROUNDS = . - RoundLen
+   ENDIF ;}
+
+  IF 1 ; {
+RoundFlags
+    .byte   KEEP_CELLS
+    .byte   KEEP_CELLS |SWAP_FOUND
+    .byte   KEEP_CELLS |SWAP_FOUND|SCROLL_COLS
+    .byte   KEEP_CELLS |           SCROLL_COLS|SCROLL_ROWS
+    .byte   KEEP_CELLS |                       SCROLL_ROWS|SWAP_COLS
+    .byte   KEEP_CELLS |                                   SWAP_COLS|SWAP_ROWS  ; 5
+    .byte   BLOCK_EMPTY|SWAP_FOUND
+    .byte   BLOCK_EMPTY|SCROLL_COLS
+    .byte   BLOCK_EMPTY|SCROLL_ROWS
+    .byte   BLOCK_EMPTY|SWAP_COLS
+    .byte   BLOCK_EMPTY|SWAP_ROWS
+    .byte   BURN_EMPTY |SWAP_FOUND
+    .byte   BURN_EMPTY |SCROLL_COLS
+    .byte   BURN_EMPTY |SCROLL_ROWS
+    .byte   BURN_EMPTY |SWAP_COLS
+    .byte   BURN_EMPTY |SWAP_ROWS
+; TODO: random from here (1 x KEEP|BLOCK|BURN, 2..5 x others)
+NUM_ROUNDS = . - RoundFlags
+RoundLen
+    .byte   12, 14, 16, 18, 20, 22
+    .byte   35, 38, 41, 44, 47              ; BLOCK (too short?)
+    .byte   50, 53, 56, 57, 60              ; BURN
 NUM_ROUNDS = . - RoundLen
    ENDIF ;}
 
