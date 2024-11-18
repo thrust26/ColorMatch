@@ -31,7 +31,6 @@
 
 ; TODOs:
 ; - better randomization
-; - check round bonus score conversion
 ; - improve remaining cells display (e.g. sprite over colored ball |B|)
 ; - better game over display
 
@@ -49,7 +48,7 @@
 ; + swap rows/cols
 ; + lose life energy based on color difference ("Chameleon")
 ; + pause at end of round
-; + game over (with sound
+; + game over (with sound)
 ; + use RESET & SELECT switches
 ; + blank cell when leaving
 ;   x what happens in between? cell could have been moved away
@@ -58,6 +57,7 @@
 ;     x what if a different cell gets moved into?
 ;     x what if it is empty?
 ;     + ignore both cases
+; - check round bonus score conversion
 
 START_GAME      = 0
 START_ROUND     = 0 ; NUM_ROUNDS-1
@@ -81,6 +81,7 @@ ILLEGAL         = 1
 DEBUG           = 1
 
 BLOCK_CELLS     = 1
+CHECK_MOVED     = 0 ; (-14) check if player was not blocked (currently superfluous)
 
 SAVEKEY         = 0 ; (-~220) support high scores on SaveKey
 PLUSROM         = 0 ; (-~50)
@@ -891,11 +892,11 @@ VerticalBlank SUBROUTINE
     ldx     INPT4
     bmi     .contStopped
     lda     gameState
-    lsr                                 ; GAME_OVER?
-    bcc     .startNextRound             ;  no, start game or next round
+    lsr
 DEBUG2
-    lsr                                 ; SELECT_MODE?
-    bcs     .startGame
+    ror                                 ; SELECT_MODE? (2)
+    bcs     .startGame                  ;  yes, start game
+    bpl     .startNextRound             ; GAME_OVER? (1) no, start next round
     jsr     Reset                       ;  no, reset
     bne     .contStopped
     DEBUG_BRK
@@ -947,9 +948,11 @@ TIM_S
     bcs     .skipDirs
     bit     $ffff               ; set V-flag
     jsr     ScrollCells
+  IF CHECK_MOVED ;{
 ; check if player was able to move
 ; currently superfluous, the player cannot be cannot be blocked in BURN_EMPTY games
     bcc     .skipDirs
+  ENDIF ;}
     lda     #GAME_RUNNING       ; remove IN_FOUND_CELL flag
     sta     gameState
 .skipDirs
@@ -1006,8 +1009,6 @@ TIM_OVS
     sta     AUDV1
     lda     #$08
     sta     AUDC1
-;    lda     #10
-;    lda     #1
     inc     soundIdx1
 .skipBurnSound
     lda     #TIMER_SPEED * 8            ; 26 * 8 = 208
@@ -1166,20 +1167,23 @@ MAX_VAL_DIFF    = $02
     sta     gameState
     ldx     #BONUS_SOUND_LEN
     ldy     #$0a
-    lda     #ROUND_BONUS+CELL_BONUS ; = 106!!! TODO
+    lda     #ROUND_BONUS+CELL_BONUS ; = 106
 .skipNextRound
     stx     soundIdx0
     sty     AUDF0
 ;---------------------------------------------------------------
-; AddTimer
+; Increase Timer
 ;---------------------------------------------------------------
     clc
-    adc     timerHi
+DEBUG0
+    adc     timerHi                 ; 152 + 152/2 + 152/5 = 258!
+    bcs     .hexOverFlow
     cmp     #MAX_TIMER
     bcc     .setTimerHi
-    sbc     #MAX_TIMER
+.hexOverFlow
+    sbc     #MAX_TIMER              ; 258 - 152 = 106!
     jsr     Hex2BCD
-    jsr     AddScore0
+    jsr     AddScore
     lda     #MAX_TIMER
 .setTimerHi
     sta     timerHi
@@ -1542,11 +1546,15 @@ ScrollCells SUBROUTINE
 TIM_R
 ; 2005 cycles
 .exit
+  IF CHECK_MOVED ;{
     sec
     rts
 
 .noMove
     clc
+  ELSE ;}
+.noMove
+  ENDIF ;}
     rts
 
 ;---------------------------------------------------------------
@@ -1673,11 +1681,15 @@ TIM_UR
 TIM_L
 ; 2117 cycles (.loopColsL crosses page)
 .exit1
+  IF CHECK_MOVED ;{
     sec
     rts
 
 .noMove1
     clc
+  ELSE ;}
+.noMove1
+  ENDIF ;}
     rts
 
 .downL
@@ -1835,11 +1847,15 @@ TIM_LU
 TIM_D
 ; 1845 cycles
 .exit2
+  IF CHECK_MOVED ;{
     sec
     rts
 
 .noMove2
     clc
+  ELSE ;}
+.noMove2
+  ENDIF ;}
     rts
 ; (2534, 2222, 1897) 1819 cycles = ~23.9 scanlines
 
@@ -2074,10 +2090,14 @@ Hex2BCD SUBROUTINE
 ;---------------------------------------------------------------
 AddScore0 SUBROUTINE
 ;---------------------------------------------------------------
-    ldy     #0
-AddScore
-    sed
     clc
+AddScore
+    ldy     #0
+    bcc     .skipIny
+    iny
+    clc
+.skipIny
+    sed
     adc     scoreLo
     sta     scoreLo
     tya
@@ -2485,7 +2505,7 @@ RoundFlags
 ; TODO: random from here (1 x KEEP|BLOCK|BURN, 2..5 x others)
 NUM_ROUNDS = . - RoundFlags
 RoundLen
-    .byte   12-10, 14, 16, 18, 20, 22
+    .byte   12, 14, 16, 18, 20, 22
     .byte   35, 37, 39, 41, 43              ; BLOCK (too short?)
     .byte   47, 50, 53, 54, 57              ; BURN
 NUM_ROUNDS = . - RoundLen
