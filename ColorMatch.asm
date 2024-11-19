@@ -57,7 +57,8 @@
 ;     x what if a different cell gets moved into?
 ;     x what if it is empty?
 ;     + ignore both cases
-; - check round bonus score conversion
+; + check round bonus score conversion
+; + improve progess bar (6 digits + bar)
 
 START_GAME      = 0
 START_ROUND     = 0 ; NUM_ROUNDS-1
@@ -66,7 +67,7 @@ START_ROUND     = 0 ; NUM_ROUNDS-1
 ; A S S E M B L E R - S W I T C H E S
 ;===============================================================================
 
-VERSION         = $0020
+VERSION         = $0030
 BASE_ADR        = $f000
 
   IFNCONST TV_MODE  ; manually defined here
@@ -358,17 +359,20 @@ PD = KernelCode - RAMKernel     ; patch delta
 
     ds      256, $ff
 
+    ds      9 , 0                ;           digit kernel alignment
+
 ;---------------------------------------------------------------
 DrawKernel SUBROUTINE
 ;---------------------------------------------------------------
     START_TMP
 .digitPtrLst    ds  12
-.digitPtr4  = .digitPtrLst
-.digitPtr2  = .digitPtrLst+2
-.digitPtr0  = .digitPtrLst+4
-.digitPtr5  = .digitPtrLst+6
-.digitPtr3  = .digitPtrLst+8
-.digitPtr1  = .digitPtrLst+10
+.digitPtr4      = .digitPtrLst
+.digitPtr2      = .digitPtrLst+2
+.digitPtr0      = .digitPtrLst+4
+.digitPtr5      = .digitPtrLst+6
+.digitPtr3      = .digitPtrLst+8
+.digitPtr1      = .digitPtrLst+10
+.ballPtr        = $fb               ; TODO
     END_TMP
     START_TMP tmpVars + DIGIT_BYTES
 .rowCount       ds 1
@@ -377,15 +381,13 @@ DrawKernel SUBROUTINE
 .tmpColP0       ds 1
 .tmpColP1       ds 1
     END_TMP
-.cursorPF2  = $fd   ; TODO
+.cursorPF2  = $fd               ; TODO
 
 ; *** Setup Digit Pointers ***
 ; setup digit pointers (fills the first 6 bytes of digitPtrLst):
 TIM_DIGITS_START
 
     ldx     #DIGIT_BYTES/2-1
-    lda     scoreLst,x
-    pha
 ; setup progress bar:
     lda     cellCnt
     lsr
@@ -398,12 +400,10 @@ TIM_DIGITS_START
     eor     #$ff
     clc
     adc     #<Blank
+    sta     .ballPtr
   IF RM_LEAD_0
     bit     .digitPtrLst+11 ; must be a high pointer (with bit 6 set)
 ;    bit     $ffff
-    bvs     .enterScoreLoop
-  ELSE
-    bne     .enterScoreLoop
   ENDIF
 
 .loopSetDigits
@@ -426,7 +426,6 @@ TIM_DIGITS_START
 .skip0Hi
   ENDIF
     lda     DigitPtrTbl,y
-.enterScoreLoop
     sta     .digitPtrLst,x
 ; setup low nibble:
     pla
@@ -546,8 +545,6 @@ WaitGap
     bne     .skipCursor
 
 .exitKernel
-;    sta     WSYNC
-
 ;---------------------------------------------------------------
 ; *** Draw energy bar ***
     START_TMP tmpVars + DIGIT_BYTES
@@ -558,7 +555,7 @@ WaitGap
 .pf1b       ds 1
 .pf0b       ds 1
     END_TMP
-.timerCol   = $fd           ; TODO?
+.timerCol   = $fd           ; TODO
 .noTimerCol = $fd-1
 
 ; prepare energy bar (1/2):
@@ -589,17 +586,18 @@ WaitGap
     sta     HMP1                ; 3
     stx     GRP1                ; 3
     stx     COLUP1
-
-    lda     #$20|%011           ; 2
-    sta     VDELP0              ; 3
+; pre-prepare digit kernel:
+    lda     #%011               ; 2
     sta     NUSIZ0              ; 3
-    lsr
-    sta     HMP0
+    sta     VDELP0              ; 3
+    stx     HMP0                ; 3
+    ldy     #$0e                ; 2         TODO? make variable?
+    sty     COLUP0              ; 3
 
     lda     timerHi             ; 3
     clc
     adc     #6                  ; 2
-    sta     WSYNC               ; 3 = 32
+    sta     WSYNC               ; 3 = 32    @52
 ;---------------------------------------
     sta     RESP1               ; 3         prepare border sprite for energy bar
     stx     GRP1                ; 3         clear P0 & P1
@@ -705,21 +703,19 @@ WaitBar
 ;---------------------------------------------------------------
 ; *** Draw score ***
                                 ;           @50
+    lda     #>DigitGfx          ; 2
+    sta     .ballPtr+1          ; 3
     ldy     #$0e                ; 2
-    lda     #$20|%001           ; 2
-    sty     COLUP0              ; 3
-    stx     HMBL                ; 3
-    stx     PF2                 ; 3 = 13    @63
+    lda     #$10|%011           ; 2
     sta     HMP1                ; 3
-    SLEEP   4                   ; 2
-    stx     PF1                 ; 3 =  8    @71
-
-    sta     VDELP1              ; 3         @74
+    stx     HMBL                ; 3         @60
+    stx     PF2                 ; 3 = 18    @68
+    stx     PF1                 ; 3         @71     @>=69
+    stx     PF0                 ; 3         @74     @>=73
+    sta     VDELP1              ; 3         @01     @>=76, disables GRP1!
 ;---------------------------------------
-    stx     PF0                 ; 3         @01
     sta     NUSIZ1              ; 3         @04
     sty     COLUP1              ; 3 =  9    @07
-
     stx     ENABL               ; 3
     stx     COLUBK              ; 3         @13
     lda     #BROWN|$e           ; 2
@@ -727,18 +723,19 @@ WaitBar
 
     ldx     #DIGIT_BYTES-1      ; 2
     ldy     #DIGIT_BYTES*2-2    ; 2 =  4
-.loopMove
+LoopMove
     lda     .digitPtrLst,x      ; 4
     sta     .digitPtrLst,y      ; 5
     dey                         ; 2
     dey                         ; 2
     dex                         ; 2
-    bne     .loopMove           ; 3/2=18/17 (last byte already at right position)
+    bne     LoopMove            ; 3/2=18/17 (last byte already at right position)
+    CHECKPAGE LoopMove
 ; total: 4+5*18-1=93                        @13+93 = @30
 
-    sta     RESBL               ; 3
-    sta     RESP0               ; 3         @43!
-    sta     RESP1               ; 3  = 9    @46!
+    sta     RESBL               ; 3         @38
+    sta     RESP0               ; 3         @41
+    sta     RESP1               ; 3  = 9    @44
 
     lda     #>DigitGfx          ; 2
     sta     .digitPtr0+1        ; 3
@@ -746,39 +743,41 @@ WaitBar
     sta     .digitPtr2+1        ; 3
     sta     .digitPtr3+1        ; 3
     sta     .digitPtr4+1        ; 3
-    sta     .digitPtr5+1        ; 3 = 20    @66
-
-    ldy     #FONT_H             ; 2 =  2
-.loopScore
-    lda     (.digitPtr0),y      ; 5
-    sta     WSYNC               ; 3 =  8
+    sta     .digitPtr5+1        ; 3
+    ldy     #FONT_H-1           ; 2 = 22    @66
+LoopScore                       ;           @66
+    lax     (.digitPtr0),y      ; 5
+    lda     (.ballPtr),y        ; 5 = 10    @76!
 ;---------------------------------------
     sta     HMOVE               ; 3
-    dey                         ; 2
+    stx     GRP0                ; 3
     sta     ENABL               ; 3
     lda     (.digitPtr1),y      ; 5
-    sta     GRP0                ; 3
+    sta     GRP1                ; 3
     lda     (.digitPtr2),y      ; 5
-    sta     GRP1                ; 3 = 24
+    sta     GRP0                ; 3 = 25
     lax     (.digitPtr5),y      ; 5
     txs                         ; 2
     lax     (.digitPtr3),y      ; 5
     lda     (.digitPtr4),y      ; 5
-    stx     GRP0                ; 3 = 20    @44
-    sta     GRP1                ; 3         @47
+    stx     GRP1                ; 3 = 20    @45!
+    sta     GRP0                ; 3         @48!
     tsx                         ; 2
-    stx     GRP0                ; 3         @52
-    sta     GRP1                ; 3         @55
+    stx     GRP1                ; 3         @53!
+    sta     GRP0                ; 3         @56!
     sta     HMCLR               ; 3
-    tya                         ; 2
-    bne   .loopScore            ; 3/2=19    @63/62
-    sty     ENABL               ; 3
-    sty     GRP0                ; 3
-    sty     GRP1                ; 3
+    tya
+    dey                         ; 2
+    bpl    LoopScore            ; 3/2=19    @65/64
+    CHECKPAGE LoopScore
+; 8 * 7 = 56 + 3 (GRP0) + 6 (move) + 4 (tsx/txs) + 5 (loop) + 2 (nop/typ) = 76
+    sta     ENABL               ; 3
+    sta     GRP0                ; 3
+    sta     GRP1                ; 3
 ;    sty     GRP0                ; 3
-    sty     VDELP0              ; 3
-    sty     VDELP1              ; 3
-    sty     COLUPF              ; 3 = 18    @04
+    sta     VDELP0              ; 3
+    sta     VDELP1              ; 3
+    sta     COLUPF              ; 3 = 18    @04
 
     lda     #2
 ;    sta     WSYNC
@@ -975,7 +974,7 @@ ContKernel
 OverScan SUBROUTINE
 ;---------------------------------------------------------------
   IF NTSC_TIM
-    lda     #36-7+6+1
+    lda     #36-1
   ELSE
     lda     #63
   ENDIF
@@ -2291,6 +2290,9 @@ DigitPtrTbl
 ID_BLANK = . - DigitPtrTbl
     .byte   <Blank
 
+ProgressGfx
+    ds  FONT_H, %1000100
+
 MultTbl
 _IDX    SET 0
     REPEAT NUM_ROWS+1
@@ -2536,7 +2538,7 @@ Start0
     ORG_FREE_LBL $fffa, "Vectors"
     .byte   "SC"        ; autodetect help
     .word   Start
-    .word   Start
+    .word   VERSION
   ENDIF
 
   IF F8SC
@@ -2549,7 +2551,7 @@ Start1
     ds 4, 0
     .byte   "SC"
     .word   Start1
-    .word   Start1
+    .word   VERSION
   ENDIF
 
 
