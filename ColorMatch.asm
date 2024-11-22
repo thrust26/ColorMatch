@@ -27,11 +27,12 @@
 ;     -10 require confirmation
 ; - reduce to
 ;   - 11 columns to get one sprite back
-;   - 9 x 7 large cells for two sprites
+;   - 10 x 7 large cells for two sprites
+;     - single player with shading
+;     - two players without shading or flickering ball
 
 ; TODOs:
 ; - better randomization
-; - improve remaining cells display (e.g. sprite over colored ball |B|)
 ; - better game over display
 
 ; DONEs:
@@ -59,6 +60,7 @@
 ;     + ignore both cases
 ; + check round bonus score conversion
 ; + improve progess bar (6 digits + bar)
+; x improve remaining cells display (e.g. sprite over colored ball |B|)
 
 START_GAME      = 0
 START_ROUND     = 0 ; NUM_ROUNDS-1
@@ -126,15 +128,14 @@ EMPTY_COL       = BLACK;+$1
 
 EOR_RND_LO      = $bd           ; %10110100 ($9c, $b4, $bd, $ca, $eb, $fc)
 
-NUM_ROWS        = 9
-NUM_COLS        = 13
+NUM_ROWS        = 7
+NUM_COLS        = 9
 NUM_CELLS       = NUM_ROWS * NUM_COLS ; = 117
-CELL_H          = 15-1
+CELL_H          = 21
 BAR_HEIGHT      = 4
 
-MROUND_CELLS     = 20
 MOVE_SPEED      = $20
-OBST_SPPED      = $0c
+OBST_SPEED      = (256 * 8) / (2 * 60)      ; every 2 seconds
 
 MAX_TIMER       = 160-8                                         ; 152
 CELL_BONUS      = (MAX_TIMER * 20 + 50) / 100                   ; 20%
@@ -143,7 +144,7 @@ TIMER_SPEED     = (256 * MAX_TIMER + (60 * 25) / 2) / (60 * 25) ; 25 seconds
 
 NUM_DIGITS      = 3
 DIGIT_BYTES     = NUM_DIGITS * 2
-NUM_TMPS        = DIGIT_BYTES * 2   ; 12
+NUM_TMPS        = DIGIT_BYTES * 2 + 2   ; 12
 
 ; gameState flags:
 GAME_RUNNING    = 1 << 7
@@ -166,6 +167,9 @@ SWAP_ROWS       = 1 << 4    ; affects 26 cells
 ; only one of these:
 BURN_EMPTY      = 1 << 6
 BLOCK_EMPTY     = 1 << 7
+
+; chamState0|1 flags:
+;CHAM_HIDDEN     = 1 << 7
 
 STACK_SIZE      = 4+2 ; 2 only used in InitGame/NextRound
 
@@ -191,7 +195,16 @@ round           .byte
 roundFlags      .byte
 cellCnt         .byte           ; number of remaing cells per round
 
-targetColor     .byte
+chamCol0        .byte
+chamCol1        .byte
+chamState0      .byte
+chamState1      .byte
+targetColor0    .byte
+targetColor1    .byte
+xPlayer0        .byte
+xPlayer1        .byte
+yPlayer0        .byte
+yPlayer1        .byte
 
 moveSum         .byte           ; joystick directional input delay counter
 obstSum         .byte           ; obstacle delay counter
@@ -295,55 +308,62 @@ _END_TMP SET .
   ENDM
 
   MAC KERNEL_CODE
-.loopKernel                     ;           @03
+    START_TMP tmpVars + DIGIT_BYTES + 4
+.gfxPtr0    ds 2
+.gfxPtr1    ds 2
+    END_TMP
+;.enterKernel
+.loopKernel                     ;           @73
+    bne     .contKernel         ; 2/3
+    jmp     ExitKernel0         ; 3 =  5    @02
+
+.contKernel                     ;           @00
+    lda     #$00                ; 2                 black r
+    sta     COLUBK              ; 3 =  5    @05     black w
+;ChamGfx0
+;    lda     Chameleon,y         ; 4
+    lda     (.gfxPtr0),y        ; 5
+    sta     GRP0                ; 3
+    lda     (.gfxPtr1),y        ; 5
+;ChamGfx1
+;    lda     Chameleon,y         ; 4
+;    nop                         ; 2
+    sta     GRP1                ; 3 = 16
+.contKernel0                    ;           @21
 Col0
     lda     #$00                ; 2                 #0r
-    sta     COLUPF              ; 3 =  5            #0w
-    pla                         ; 4
-    pha                         ; 3
-    rol     $3f                 ; 5 = 12            free cycles (3|4 bytes)
-Col3
-    ldx     #$00                ; 2                 #3r
+    sta     COLUBK              ; 3         @26     #0w
+.enterKernel
 Col1
     lda     #$00                ; 2                 #1r
-    sta     COLUPF              ; 3 =  7    @27!    #1w
+    sta     COLUBK              ; 3 = 10    @31!    #1w
 Col2
     lda     #$00                ; 2                 #2r
-    sta     COLUPF              ; 3                 #2w
-    stx     COLUPF              ; 3                 #3w
+    sta     COLUBK              ; 3                 #2w
+Col3
+    lda     #$00                ; 2                 #3r
+    sta.w   COLUBK              ; 3                 #3w
 Col4
     lda     #$00                ; 2                 #4r
-    sta     COLUPF              ; 3                 #4w
+    sta     COLUBK              ; 4 = 16    @47!    #4w
+Col5
+    lda     #$00                ; 2                 #5r
+    sta     COLUBK              ; 3                 #5w
 Col6
     lda     #$00                ; 2                 #6r
-    sta     COLUPF              ; 3 = 20    @47!    #6w
-Col8
-    ldx     #$00                ; 2                 #8r
+    sta.w   COLUBK              ; 3         @58     #6w
 Col7
     lda     #$00                ; 2                 #7r
-    sta     COLUPF              ; 3                 #7w
-    stx     COLUPF              ; 3                 #8w
-Col10
-    lda     #$00                ; 2                 #10r
-    sta     COLUPF              ; 3                 #10w
-Col11
-    lda     #$00                ; 2                 #11r
-Col12
-    ldx     #$00                ; 2                 #12r
-    sta     COLUPF              ; 3                 #11w
+    sta     COLUBK              ; 3                 #7w
+Col8
+    lda     #$00                ; 2                 #8r
+    sta     COLUBK              ; 3 = 21    @68!    #8w
     dey                         ; 2
-    stx     COLUPF              ; 3 = 25    @72!    #12w
-; 13 blocks: 45 cycles               (9 * 3 + 8 * 2 = 43) (could be:  9 * 3 + 7 * 2 = 41)
-;                                                         (1 sprite: 10 * 3 + 8 * 2 = 46)
-; 11 blocks: 45-(12/3)*2 = 37 cycles (7 * 3 + 6 * 2 = 31) (could be:  7 * 3 + 5 * 2 = 29)
-;                                    (8 * 3 + 6 * 2 = 36, 1 sprite)
-.enterKernel
-    sta     WSYNC               ; 3
-;---------------------------------------
-    bne     .loopKernel         ; 3/2
-    rts                         ; 6         @08
+    bpl     .loopKernel         ; 3/2
+    jmp     ExitKernel          ; 3         @75
 KernelCodeEnd
 
+ContKernel0 = RAMKernel + .contKernel0 - KernelCode
 EnterKernel = RAMKernel + .enterKernel - KernelCode
 PD = KernelCode - RAMKernel     ; patch delta
   ENDM
@@ -359,8 +379,6 @@ PD = KernelCode - RAMKernel     ; patch delta
 
     ds      256, $ff
 
-    ds      9 , 0                ;           digit kernel alignment
-
 ;---------------------------------------------------------------
 DrawKernel SUBROUTINE
 ;---------------------------------------------------------------
@@ -374,14 +392,6 @@ DrawKernel SUBROUTINE
 .digitPtr1      = .digitPtrLst+10
 .ballPtr        = $fb               ; TODO
     END_TMP
-    START_TMP tmpVars + DIGIT_BYTES
-.rowCount       ds 1
-.colorPtr       ds 2
-.targetColor    ds 1
-.tmpColP0       ds 1
-.tmpColP1       ds 1
-    END_TMP
-.cursorPF2  = $fd               ; TODO
 
 ; *** Setup Digit Pointers ***
 ; setup digit pointers (fills the first 6 bytes of digitPtrLst):
@@ -451,100 +461,180 @@ TIM_DIGITS_START
 TIM_DIGITS_END
 ; 196 cycles
 
-    ldx     #%10110110
-    lda     #BLACK
-    bit     gameState
-    bpl     .skipRunning
-    lda     targetColor
-    ldx     #%11110110
-.skipRunning
-    sta     .targetColor
-    stx     .cursorPF2
+    START_TMP tmpVars + DIGIT_BYTES
+.rowCount       ds 1
+.colorPtr       ds 2
+.tmpGfx1        ds 1
+.gfxPtr0        ds 2
+.gfxPtr1        ds 2
+    END_TMP
 
+    lda     #<colorLst_R + NUM_COLS * (NUM_ROWS - 1)
+    sta     .colorPtr
+    lda     #>colorLst_R
+    sta     .colorPtr+1         ;  = 10
+
+    lda     #>Chameleon
+    sta     .gfxPtr0+1
+    sta     .gfxPtr1+1
+
+    lda     #%01000100
+    sta     PF2
+    sta     PF0
+    lsr                         ;           #%00100010
+    sta     PF1                 ;  = 13
+    lsr
+    sta     VDELP0              ;           enable
+
+    ldy     #NUM_ROWS           ;           = 6
+    sty     .rowCount
+
+    jsr     PrepareTargetBars
+    stx     GRP0                ;           VDELed!
+
+    lda     targetColor0        ; 3
+    sta     COLUP0              ; 3
+    lda     targetColor1        ; 4 = 10
 .waitTim
-    lda     INTIM
+    ldy     INTIM
     bne     .waitTim
     sta     WSYNC
 ;---------------------------------------
-    sta     VBLANK              ; 3 =  3
+    sty.w   VBLANK              ; 4
+    beq     .enterLoop          ; 3         @07!
+    DEBUG_BRK
 
-    lda     #%111               ; 2
-    sta     NUSIZ0              ; 3
-    sta     NUSIZ1              ; 3
-    ldy     #NUM_ROWS-1         ; 2
-    sty     .rowCount           ; 3 = 25
-    lda     #%01100000          ; 2
-    sta     PF0                 ; 3
-    lda     #%11011011          ; 2
-    sta     PF1                 ; 3
-    asl                         ; 2         #%10110110
-    SLEEP   11
-    sta     RESP0               ; 3 = 10    @42
-    ldx     #<colorLst_R + NUM_COLS * (NUM_ROWS - 1); 2
-    sta     PF2                 ; 3
-    stx     .colorPtr           ; 3
-    ldx     #>colorLst_R        ; 2
-    stx     .colorPtr+1         ; 3
-    sta     RESP1               ; 3 = 16    @58
-
+.exitLoopJmp
+    jmp     .exitLoop
 ;---------------------------------------------------------------
-.loopRows                       ;           @50/51
-    clc                         ; 2
-    ldy     #NUM_COLS-1         ; 2 =  4
+; kernel loops to here
+ExitKernel                      ;           @75
+    iny                         ; 2
+;---------------------------------------
+    sty     COLUBK              ; 3
+; enable target cursor:         ;           @04
+    lda     targetColor1        ; 3 =  8
+.enterLoop                      ;           @07!
+    sta     COLUP1              ; 3
+    lda     targetColor0        ; 3
+    sta     COLUP0              ; 3 =  9
+    stx     GRP0                ; 3                 VDELed
+    lda     .tmpGfx1            ; 3
+    sta     GRP1                ; 3 =  9    @25!    (goal < @26)
+; restore stack pointer:
+    ldx     #$ff                ; 2
+    txs                         ; 2
+; loop:
+    dec     .rowCount           ; 3
+    bmi     .exitLoopJmp        ; 2/3
+    ldy     .rowCount           ;  =  3
+; calculate for new row:
+    jsr     PrepareTargetBars   ;
+    txs                         ; 2 = ???
+; setup chameleon pointers:
+    lda     #<NoChameleon+1     ; 2
+    cpy     yPlayer1            ; 3
+    bne     .emptyP1            ; 2/3
+    lda     #<Chameleon+1       ; 2
+.emptyP1
+    sta     .gfxPtr1
+;    sta     ChamGfx1 + 1 - PD   ; 3 = 11/12
+    lda     #<NoChameleon+1     ; 2
+    cpy     yPlayer0            ; 3
+    bne     .emptyP0            ; 2/3
+    lda     #<Chameleon+1       ; 2
+;    bit     chamState0          ;           CHAM_HIDDEN?
+;    bpl     .emptyP0            ;
+;    lda     #<Chameleon0+1      ; 2
+.emptyP0
+    sta     .gfxPtr0
+;    sta     ChamGfx0 + 1 - PD   ; 3 = 11/12
+; move ball only:
+    sta     HMCLR
+    lda     #$50
+    sta     HMBL                ;           @~40
+
+;    ldx     targetColor0
+;    lda     xPlayer0
+;    cmp     xPlayer1
+;    bne     .posOk
+;    lda     yPlayer0
+;    eor     yPlayer1
+;    cmp     #1
+;    bne     .posOk
+;    ldx     targetColor1
+;.posOk
+; TODO: swap player assignment to GRPx/COLUPx
+    sta     WSYNC
+;---------------------------------------
+    sta     HMOVE
+    nop     COLUP0
+
+; patch kernel with current line's color values:
+    ldy     #NUM_COLS-1         ; 2 =  2
 LoopPatch
     lda     (.colorPtr),y       ; 5
     ldx     PatchTbl,y          ; 4
     sta     $00,x               ; 4
     dey                         ; 2
-    bpl     LoopPatch           ; 3/2=21/20
+    bpl     LoopPatch           ; 3/2=18/17
     CHECKPAGE LoopPatch
-; 4 + (21 - 3) * 13 - 1 = 276 - 39
+; 2 + 18 * 9 - 1 = 163
 
-    lda     .colorPtr
-;    sec
-    sbc     #NUM_COLS-1
-    sta     .colorPtr
+    lda     .colorPtr           ; 3
+    sec                         ; 2
+    sbc     #NUM_COLS           ; 2
+    sta     .colorPtr           ; 3 = 10
+; avoid moving ball AFTER kernel:
+    ldx     #0                  ; 2
+    stx     HMBL                ; 3
+    lda     #$50                ; 2
+    sta     HMP0                ; 3
+    sta     HMP1                ; 3 = 13
 
-    lda     .tmpColP1
-    ldx     #8
-WaitGap
-    dex
-    bne     WaitGap             ;   = 41
-    CHECKPAGE WaitGap
-    ldy     #CELL_H
-    sta.w   COLUP1
-    lda     .tmpColP0
-    sta     COLUP0
-    lda     #%11000000
-    sta     GRP0
-    sta     GRP1                ;           @65
-    jsr     EnterKernel         ;           @08
-    sty     COLUPF              ;           Y = 0
-    sty     GRP1
-    lda     .targetColor
-    sta     COLUP0
-; enable target cursor:
-    ldx     #%10110110
-    lda     .rowCount
-    eor     #NUM_ROWS/2
-    lsr
-    bne     .skipCursorWait
-    ldy     #%00111100          ;           sprite for target color above and below central cell
-    bcc     .skipCursor
-    ldx     .cursorPF2          ;           = %11110110, wider central cell
-.skipCursor
-    sty     GRP0
-    stx     PF2
-    SLEEP   8
-    dec     .rowCount
-    bpl     .loopRows
-    bmi     .exitKernel
+;    SLEEP   26
+    SLEEP   26-11+8
+;    ldy     #4
+;.loopWait
+;    dey
+;    bne     .loopWait
 
-.skipCursorWait
-    nop
-    bne     .skipCursor
+;    lda     #BLACK              ; 2
+;    bit     chamState0          ; 3                 CHAM_HIDDEN?
+;    bpl     .notHidden0         ; 2/3
+;    NOP_W                       ; 1
+;.notHidden0
+    lda     chamCol0            ; 3 = 11
 
-.exitKernel
+    ldy     chamCol1            ; 3
+    stx     GRP0                ; 3                 VDELed!
+    stx     NUSIZ0              ; 3          @75    X = 0
+;---------------------------------------
+    stx     NUSIZ1              ; 3
+    sta     COLUP0              ; 3
+    sty     COLUP1              ; 3
+    stx     GRP1                ; 3 = 12
+    lda     Col0 + 1 - PD       ; 3
+    ldy     #CELL_H-1           ; 2
+    sta     HMOVE               ; 3 =  8    @19!    +5
+    sta.w   COLUBK              ; 4
+    jmp     EnterKernel         ; 3 =  7    @26!
+
+ExitKernel0                     ;           @02
+; preload cursor (16 cycles):
+    sta     HMOVE               ; 3         @05     -5
+    sty     COLUBK              ; 3 =  6    @08     Y = 0
+    tsx                         ; 2                 the only slot to get SP into X
+    lda     #%110101            ; 2                 double width players, 8 pixel ball (4 would do too)
+    sta     NUSIZ0              ; 3
+    sta     NUSIZ1              ; 3 = 10    @18
+    jmp     ContKernel0         ; 3 =  3    @21
+
+.exitLoop
+    sta     WSYNC
+    sta     WSYNC
+;    jmp     EXIT
+
 ;---------------------------------------------------------------
 ; *** Draw energy bar ***
     START_TMP tmpVars + DIGIT_BYTES
@@ -555,8 +645,8 @@ WaitGap
 .pf1b       ds 1
 .pf0b       ds 1
     END_TMP
-.timerCol   = $fd           ; TODO
-.noTimerCol = $fd-1
+.timerCol   = $ff           ; TODO
+.noTimerCol = $ff-1
 
 ; prepare energy bar (1/2):
     lda     #NO_TIMER_COL   ; 2
@@ -576,6 +666,7 @@ WaitGap
     sty     .timerCol       ; 3 = 18
 
     ldx     #%000               ; 2
+    stx     ENABL
     stx     PF0
     stx     PF1
     stx     PF2
@@ -589,7 +680,7 @@ WaitGap
 ; pre-prepare digit kernel:
     lda     #%011               ; 2
     sta     NUSIZ0              ; 3
-    sta     VDELP0              ; 3
+;    sta     VDELP0              ; 3
     stx     HMP0                ; 3
     ldy     #$0e                ; 2         TODO? make variable?
     sty     COLUP0              ; 3
@@ -775,10 +866,11 @@ LoopScore                       ;           @66
     sta     GRP0                ; 3
     sta     GRP1                ; 3
 ;    sty     GRP0                ; 3
-    sta     VDELP0              ; 3
+;    sta     VDELP0              ; 3
     sta     VDELP1              ; 3
     sta     COLUPF              ; 3 = 18    @04
 
+EXIT
     lda     #2
 ;    sta     WSYNC
 ;;---------------------------------------
@@ -788,28 +880,63 @@ LoopScore                       ;           @66
     jmp     ContKernel
 ; /DrawKernel
 
+;---------------------------------------------------------------
+PrepareTargetBars ;SUBROUTINE
+;---------------------------------------------------------------
+    tya                         ; 2         6..0
+    sec                         ; 2         7, 6 = 1; 6, 6 = 1;
+    sbc     yPlayer1            ; 3         6..0
+    cmp     #$02                ; 2
+    ldx     #0                  ; 2
+    bcs     .skipP1             ; 2/3
+    dex                         ; 2
+.skipP1
+    stx     .tmpGfx1
+
+    tya                         ; 2
+    sec                         ; 2
+    sbc     yPlayer0            ; 3
+    cmp     #$02                ; 2
+    ldx     #0                  ; 2
+    bcs     .skipP0             ; 2/3
+    dex                         ; 2
+.skipP0
+    rts
+; /PrepareTargetBars
+
+
 KernelCode ; copied into RAM and patched there
     KERNEL_CODE
 
     ALIGN_FREE_LBL   256, "PatchTbl"
 
 PatchTbl
+;    .byte   Col0 + 1 - PD
+;    .byte   Col1 + 1 - PD
+;    .byte   Col2 + 1 - PD
+;    .byte   Col3 + 1 - PD
+;    .byte   Col4 + 1 - PD
+;    .byte   .tmpColP0       ; -> COLUP0
+;    .byte   Col6 + 1 - PD
+;    .byte   Col7 + 1 - PD
+;    .byte   Col8 + 1 - PD
+;    .byte   .tmpColP1       ; -> COLUP1
+;    .byte   Col10 + 1 - PD
+;    .byte   Col11 + 1 - PD
+;    .byte   Col12 + 1 - PD
+;    CHECKPAGE_DATA PatchTbl
+;NUM_COLS    = . - PatchTbl ; 13
     .byte   Col0 + 1 - PD
     .byte   Col1 + 1 - PD
     .byte   Col2 + 1 - PD
     .byte   Col3 + 1 - PD
     .byte   Col4 + 1 - PD
-    .byte   .tmpColP0       ; -> COLUP0
+    .byte   Col5 + 1 - PD
     .byte   Col6 + 1 - PD
     .byte   Col7 + 1 - PD
     .byte   Col8 + 1 - PD
-    .byte   .tmpColP1       ; -> COLUP1
-    .byte   Col10 + 1 - PD
-    .byte   Col11 + 1 - PD
-    .byte   Col12 + 1 - PD
     CHECKPAGE_DATA PatchTbl
-NUM_COLS    = . - PatchTbl ; 13
-
+NUM_COLS    = . - PatchTbl ; 9
 
 ;---------------------------------------------------------------
 Start SUBROUTINE
@@ -839,7 +966,7 @@ VerticalBlank SUBROUTINE
     inc     frameCnt
 
   IF NTSC_TIM
-    lda     #44-4+4 +1        ; 38*64 = 2432
+    lda     #44+1-7        ; 38*64 = 2432
   ELSE
     lda     #77
   ENDIF
@@ -908,10 +1035,17 @@ DEBUG2
 .roundDone
     jsr     NextRound
     lda     #0
-    NOP_W
+    sta     gameState
+    beq     .contStopped
+;    NOP_W
 .startNextRound
     lda     #GAME_RUNNING
     sta     gameState
+DEBUG1
+    jsr     GetRandomCellIdx    ; extra stack usage only here!
+    sta     targetColor0
+    jsr     GetRandomCellIdx    ; extra stack usage only here!
+    sta     targetColor1
 .contStopped
     jmp     .skipRunning
 
@@ -947,11 +1081,13 @@ TIM_S
     bcs     .skipDirs
     bit     $ffff               ; set V-flag
     jsr     ScrollCells
-  IF CHECK_MOVED ;{
+  IF CHECK_MOVED ; {
 ; check if player was able to move
 ; currently superfluous, the player cannot be cannot be blocked in BURN_EMPTY games
     bcc     .skipDirs
   ENDIF ;}
+;    lda     #0
+;    sta     chamState0
     lda     #GAME_RUNNING       ; remove IN_FOUND_CELL flag
     sta     gameState
 .skipDirs
@@ -965,6 +1101,33 @@ TIM_S
     bne     .skipResetColors
     jsr     InitColors
 .skipResetColors
+
+; position players and ball:
+    lda     xPlayer0
+    asl
+    asl
+    asl
+    asl
+    adc     #14-5           ; HMOVEd initally
+    ldx     #0
+    jsr     SetXPos
+    lda     xPlayer1
+    asl
+    asl
+    asl
+    asl
+    adc     #14-5
+    inx
+    jsr     SetXPos
+    sta     WSYNC
+;---------------------------------------
+    sta     HMOVE
+    lda     #%10
+    sta     ENABL
+    lda     #%110000
+    sta     CTRLPF
+    SLEEP   57
+    sta     RESBL
 ; /VerticalBlank
 
     jmp     DrawKernel
@@ -974,7 +1137,7 @@ ContKernel
 OverScan SUBROUTINE
 ;---------------------------------------------------------------
   IF NTSC_TIM
-    lda     #36-1
+    lda     #36-1-7
   ELSE
     lda     #63
   ENDIF
@@ -1024,7 +1187,7 @@ TIM_OVS
     lsr
     lsr
     tay
-    lda     targetColor
+    lda     targetColor0                ; chamCol0
     lsr
     lsr
     lsr
@@ -1048,7 +1211,7 @@ TIM_OVS
     lda     colorLst_R+NUM_CELLS/2
     and     #$0f
     sta     .tmpVal
-    lda     targetColor
+    lda     targetColor0                ; chamCol0
     and     #$0f
     sec
     sbc     .tmpVal
@@ -1059,9 +1222,11 @@ TIM_OVS
     lsr
 .wait4ever
     bcs     .wait4ever
-    adc     .hueDiff                    ; 1..6 + 1..7 = 2..13
-    asl                                 ; 2..26
-    asl                                 ; 4..52
+    adc     .hueDiff                    ; 1..4 + 1..6 = 2..10 (was: 1..6 + 1..7 = 2..13)
+    sta     .hueDiff
+    asl                                 ; 4..20 (was: 4..26)
+    adc     .hueDiff                    ; 6..30
+    asl                                 ; 12..60 (was: 8..52)
 ;    adc     #12
 .contDecTimer
     clc
@@ -1091,7 +1256,7 @@ TIM_OVS
     bpl     .coarseCheck
     ldx     #NUM_CELLS/2
     lda     colorLst_R+NUM_CELLS/2
-    cmp     targetColor
+    cmp     targetColor0
     beq     .foundTargetCol
     jmp     .skipNewCol
 
@@ -1103,7 +1268,7 @@ MAX_VAL_DIFF    = $02
 
 ; compare hue:
 .checkHue
-    lda     targetColor
+    lda     targetColor0
     lsr
     lsr
     lsr
@@ -1126,7 +1291,7 @@ MAX_VAL_DIFF    = $02
 
 ; compare value:
 .checkRangeValue    ; hue is the same
-    lda     targetColor
+    lda     targetColor0
     sec
     sbc     colorLst_R+NUM_CELLS/2
     clc
@@ -1136,7 +1301,7 @@ MAX_VAL_DIFF    = $02
     bcc     .foundTargetCol             ;  yes, match!
 
 .checkSameValue
-    lda     targetColor
+    lda     targetColor0
     eor     colorLst_R+NUM_CELLS/2
     and     #$0f
     bne     .skipNewCol                 ;  no, no match
@@ -1149,11 +1314,16 @@ MAX_VAL_DIFF    = $02
     lda     #GAME_RUNNING|IN_FOUND_CELL
     sta     gameState
 .skipEmpty
+;    lda     targetColor0
+;    sta     chamCol0
+;    lda     #CHAM_HIDDEN
+;    sta     chamState0
     jsr     GetRandomCellIdx
-    sta     targetColor
+    sta     targetColor0
 ; increase score:
-    lda     #$50
-    jsr     AddScore0
+    lda     #$00
+    sec
+    jsr     AddScore
 ; start found sound and add extra time:
     lda     #$04
     sta     AUDC0
@@ -1192,7 +1362,7 @@ DEBUG0
 ; Apply Obstacles
 ;---------------------------------------------------------------
     lda     frameCnt                ; TODO: can be done every 2nd frame
-    and     #$03
+    and     #$07
     beq     .doApplyObst
 .skipApplyObstJmp
     jmp     .skipApplyObst
@@ -1214,7 +1384,7 @@ TMP_BASE    = .             ; .tmpObst has to be preserved until the end of obst
     END_TMP
     lda     obstSum
     clc
-    adc     #OBST_SPPED
+    adc     #OBST_SPEED
     sta     obstSum
     bcc     .skipApplyObstJmp
 ;---------------------------------------------------------------
@@ -1952,6 +2122,19 @@ GetRandomCellIdx SUBROUTINE
 ;---------------------------------------------------------------
 GameInit SUBROUTINE
 ;---------------------------------------------------------------
+    lda     #4
+    sta     xPlayer0
+    lda     #3
+    sta     yPlayer0
+    lda     #1
+    sta     xPlayer1
+    lda     #8
+    sta     yPlayer1
+    lda     #$0e
+    sta     chamCol0
+    lda     #$ac
+    sta     chamCol1
+
     ldx     #KernelCodeEnd-KernelCode-1
 .loopCopy
     lda     KernelCode,x
@@ -2058,8 +2241,9 @@ InitColors
 ;    bpl     .loopRows
 ;; 1639 cycles
 
-    jsr     GetRandomCellIdx    ; extra stack usage only here!
-    sta     targetColor
+    lda     #0
+    sta     targetColor0
+    sta     targetColor1
 
     ldy     round
     lda     RoundFlags,y
@@ -2124,24 +2308,24 @@ NextRandom SUBROUTINE
 
 ;    ALIGN_FREE_LBL  256, "SetXPos"
 ;
-;;---------------------------------------------------------------
-;SetXPos SUBROUTINE
-;;---------------------------------------------------------------
-;    sec
-;    sta     WSYNC
-;WaitObject:
-;    sbc     #$0f            ; 2
-;    bcs     WaitObject      ; 3/2
-;    CHECKPAGE WaitObject
-;    eor     #$07            ; 2
-;    asl                     ; 2
-;    asl                     ; 2
-;    asl                     ; 2
-;    asl                     ; 2
-;    sta     HMP0,x          ; 4
-;    sta.wx  RESP0,x         ; 5     @23!
-;    rts
-;; SetXPos
+;---------------------------------------------------------------
+SetXPos SUBROUTINE
+;---------------------------------------------------------------
+    sec
+    sta     WSYNC
+WaitObject:
+    sbc     #$0f            ; 2
+    bcs     WaitObject      ; 3/2
+    CHECKPAGE WaitObject
+    eor     #$07            ; 2
+    asl                     ; 2
+    asl                     ; 2
+    asl                     ; 2
+    asl                     ; 2
+    sta     HMP0,x          ; 4
+    sta.wx  RESP0,x         ; 5     @23!
+    rts
+; SetXPos
 
 
 ;===============================================================================
@@ -2270,20 +2454,6 @@ Blank
     ds  FONT_H, 0
   CHECKPAGE_DATA_LBL DigitGfx, "DigitGfx"
 
-;Chameleon
-;    .byte   %00011000
-;    .byte   %01111110
-;    .byte   %11000011
-;    .byte   %10111101
-;    .byte   %11100111
-;    .byte   %01111110
-;    .byte   %01111110
-;    .byte   %10011001
-;    .byte   %10011001
-;    .byte   %01011010
-;    .byte   %00111100
-;    .byte   %00011000
-
 DigitPtrTbl
     .byte   <Zero,  <One,   <Two,   <Three, <Four
     .byte   <Five,  <Six,   <Seven, <Eight, <Nine
@@ -2304,37 +2474,38 @@ _IDX    SET _IDX + 1
 
   IF NTSC_COL
 ColorTbl
-    .byte   YELLOW          ; $10
+;ORANGE  = $30
+;    .byte   YELLOW         ; $10
     .byte   BROWN           ; $20
 ;    .byte   ORANGE          ; $30  skipped
     .byte   RED             ; $40
     .byte   MAUVE           ; $50
-    .byte   VIOLET          ; $60
+;    .byte   VIOLET          ; $60
     .byte   PURPLE          ; $70
     .byte   BLUE            ; $80
     .byte   BLUE_CYAN       ; $90
     .byte   CYAN            ; $a0
-    .byte   CYAN_GREEN      ; $b0
+;    .byte   CYAN_GREEN      ; $b0
     .byte   GREEN           ; $c0
-    .byte   GREEN_YELLOW    ; $d0
+;    .byte   GREEN_YELLOW    ; $d0
     .byte   GREEN_BEIGE     ; $e0
-;    .byte   BEIGE           ; $f0  skipped
-NUM_COLS    = . - ColorTbl  ; 13
-HueIdx = . - 1
-    .byte   0       ; YELLOW          $10
-    .byte   1       ; BROWN           $20
+;;    .byte   BEIGE          ; $f0  skipped
+NUM_COLS    = . - ColorTbl  ; 9
+HueIdx = . - 2
+;    .byte   $ff     ; YELLOW          $10
+    .byte   0       ; BROWN           $20
     .byte   $ff     ; (ORANGE)        $30   skipped
-    .byte   2       ; RED             $40
-    .byte   3       ; MAUVE           $50
-    .byte   4       ; VIOLET          $60
-    .byte   5       ; PURPLE          $70
-    .byte   6       ; BLUE            $80
-    .byte   7       ; BLUE_CYAN       $90
-    .byte   8       ; CYAN            $a0
-    .byte   9       ; CYAN_GREEN      $b0
-    .byte   10      ; GREEN           $c0
-    .byte   11      ; GREEN_YELLOW    $d0
-    .byte   12      ; GREEN_BEIGE     $e0
+    .byte   1       ; RED             $40
+    .byte   2       ; MAUVE           $50
+    .byte   $ff     ; VIOLET          $60   skipped
+    .byte   3       ; PURPLE          $70
+    .byte   4       ; BLUE            $80
+    .byte   5       ; BLUE_CYAN       $90
+    .byte   6       ; CYAN            $a0
+    .byte   $ff     ; CYAN_GREEN      $b0   skipped
+    .byte   7       ; GREEN           $c0
+    .byte   $ff     ; GREEN_YELLOW    $d0   skipped
+    .byte   8       ; GREEN_BEIGE     $e0
                     ; (BEIGE)         $f0
   ELSE ; PAL
 PAL_WHITE   = BLACK+$10     ; $10
@@ -2344,52 +2515,50 @@ ColorTbl
     .byte   RED             ; $60
     .byte   MAUVE           ; $80
     .byte   VIOLET          ; $a0
-    .byte   PURPLE          ; $c0
+;    .byte   PURPLE          ; $c0
     .byte   BLUE            ; $d0
-    .byte   BLUE_CYAN       ; $b0
+;    .byte   BLUE_CYAN       ; $b0
     .byte   CYAN            ; $90
     .byte   CYAN_GREEN      ; $70
-    .byte   GREEN           ; $50
+;    .byte   GREEN           ; $50
     .byte   GREEN_YELLOW    ; $30
-    .byte   PAL_WHITE       ; $10
+;    .byte   BLACK           ; $10
+
 NUM_COLS    = . - ColorTbl  ; 13
-HueIdx = . - 1
-    .byte   12      ; PAL_WHITE       $10
+HueIdx = . - 2
+;    .byte   $ff     ; PAL_WHITE       $10
     .byte   0       ; YELLOW          $20
-    .byte   11      ; GREEN_YELLOW    $30
+    .byte   8       ; GREEN_YELLOW    $30
     .byte   1       ; ORANGE          $40
-    .byte   10      ; GREEN           $50
+    .byte   $ff     ; GREEN           $50   skipped
     .byte   2       ; RED             $60
-    .byte   9       ; CYAN_GREEN      $70
+    .byte   7       ; CYAN_GREEN      $70
     .byte   3       ; MAUVE           $80
-    .byte   8       ; CYAN            $90
+    .byte   6       ; CYAN            $90
     .byte   4       ; VIOLET          $a0
-    .byte   7       ; BLUE_CYAN       $b0
-    .byte   5       ; PURPLE          $c0
-    .byte   6       ; BLUE            $d0
-  ENDIF
+    .byte   $ff     ; BLUE_CYAN       $b0   skipped
+    .byte   $ff     ; PURPLE          $c0   skipped
+    .byte   5       ; BLUE            $d0
+  ENDIF ; /PAL
 
 LumTbl
-  IF 0
-;    .byte   $04
-;    .byte   $06
-;    .byte   $08
-;    .byte   $0a
-;    .byte   $0e
-;    .byte   $0a
-;    .byte   $06
-;    .byte   $04
-;    .byte   $02
-  ENDIF
-  IF 1
+  IF NTSC
     .byte   $00
     .byte   $02
     .byte   $04
     .byte   $06
     .byte   $08
     .byte   $0a
-    .byte   $0c
+;    .byte   $0c    ; skipped
     .byte   $0e
+  ELSE
+    .byte   $00
+    .byte   $02
+    .byte   $04
+    .byte   $06     ; seems identical with $08 on Sony CRT
+    .byte   $08
+    .byte   $0a     ; seems identical with $0c on Sony CRT
+;    .byte   $0c    ; skipped
     .byte   $0e
   ENDIF
 
@@ -2419,6 +2588,51 @@ HmPTbl
 HmTbl = . - $f1
     .byte   $60, $50, $40, $30, $20, $10, $00
     .byte   $f0, $e0, $d0, $c0, $b0, $a0, $90, $80
+
+    .byte   $55
+
+ChameleonGfx = . - 1
+Chameleon  = . - 1
+    ds  (CELL_H-CHAMELEON_H+1)/2, 0
+ChamGfxStart
+    .byte   %00011000
+    .byte   %01111110
+    .byte   %11111111
+    .byte   %10000001
+    .byte   %11111111
+    .byte   %11111111
+    .byte   %01100110
+    .byte   %01111110
+    .byte   %01111110
+    .byte   %10011001
+    .byte   %10111101
+    .byte   %10111101
+    .byte   %10011001
+    .byte   %01111110
+    .byte   %00011000
+CHAMELEON_H = . - ChamGfxStart
+;    ds  (CELL_H-CHAMELEON_H)/2-1, 0
+Chameleon0 = . - 1
+    ds  (CELL_H-CHAMELEON_H+1)/2, 0
+    .byte   %00011000
+    .byte   %01100110
+    .byte   %10000001
+    .byte   %10111101
+    .byte   %10000001
+    .byte   %10000001
+    .byte   %01011010
+    .byte   %01000010
+    .byte   %01000010
+    .byte   %10000001
+    .byte   %10100101
+    .byte   %10100101
+    .byte   %10000001
+    .byte   %01100110
+    .byte   %00011000
+;    ds  (CELL_H-CHAMELEON_H)/2-1, 0
+NoChameleon
+    ds  CELL_H, 0
+    CHECKPAGE ChameleonGfx
 
 ScrollMask = . - 1
     .byte   %01, %01, %11
@@ -2508,8 +2722,8 @@ RoundFlags
 NUM_ROUNDS = . - RoundFlags
 RoundLen
     .byte   12, 14, 16, 18, 20, 22
-    .byte   35, 37, 39, 41, 43              ; BLOCK (too short?)
-    .byte   47, 50, 53, 54, 57              ; BURN
+    .byte   25, 27, 29, 31, 33              ; BLOCK (good length?)
+    .byte   37, 30, 43, 44, 47              ; BURN
 NUM_ROUNDS = . - RoundLen
    ENDIF ;}
 VarStartRound
@@ -2561,6 +2775,7 @@ Start1
 
     LIST OFF
     ECHO ""
+    ECHO "*** RAM-Kernel :", [KernelCodeEnd - KernelCode]d, "bytes ***"
     ECHO "*** Free RAM   :", [$100 - STACK_SIZE - RAM_END]d, "bytes ***"
     ECHO "*** Free ROM   :", [FREE_TOTAL + DEBUG_BYTES]d, "bytes ***"
     ECHO ""
