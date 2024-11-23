@@ -26,14 +26,19 @@
 ;     - 9 remove found cells (deadly)
 ;     -10 require confirmation
 ; - reduce to
-;   - 11 columns to get one sprite back
-;   - 10 x 7 large cells for two sprites
-;     - single player with shading
-;     - two players without shading or flickering ball
+;   x 11 columns to get one sprite back
+;   + 9 x 7 large cells for two sprites
+;     + single player (with shading)
+;     + two players without shading
 
 ; TODOs:
 ; - better randomization
-; - better game over display
+; - better game over display (also remove target bars)
+; - change controls (move players instead of cells)
+; - let chameleon adapt to current cell (drains time)
+; - display adapted chameleon
+; - overlap bottom most target cursor with bar preparation
+; ? while adapting chameleon cannot move
 
 ; DONEs:
 ; + game variations:
@@ -69,7 +74,7 @@ START_ROUND     = 0 ; NUM_ROUNDS-1
 ; A S S E M B L E R - S W I T C H E S
 ;===============================================================================
 
-VERSION         = $0030
+VERSION         = $0040
 BASE_ADR        = $f000
 
   IFNCONST TV_MODE  ; manually defined here
@@ -195,8 +200,8 @@ round           .byte
 roundFlags      .byte
 cellCnt         .byte           ; number of remaing cells per round
 
-chamCol0        .byte
-chamCol1        .byte
+chamColor0      .byte
+chamColor1      .byte
 chamState0      .byte
 chamState1      .byte
 targetColor0    .byte
@@ -489,6 +494,10 @@ TIM_DIGITS_END
     ldy     #NUM_ROWS           ;           = 6
     sty     .rowCount
 
+    lda     #%110101            ; 2                 double width players, 8 pixel ball (4 would do too)
+    sta     NUSIZ0              ; 3
+    sta     NUSIZ1              ; 3 = 10    @18
+
     jsr     PrepareTargetBars
     stx     GRP0                ;           VDELed!
 
@@ -500,8 +509,8 @@ TIM_DIGITS_END
     bne     .waitTim
     sta     WSYNC
 ;---------------------------------------
-    sty.w   VBLANK              ; 4
-    beq     .enterLoop          ; 3         @07!
+    sty     VBLANK              ; 3
+    beq     .enterLoop          ; 3         @06
     DEBUG_BRK
 
 .exitLoopJmp
@@ -593,7 +602,7 @@ LoopPatch
     sta     HMP1                ; 3 = 13
 
 ;    SLEEP   26
-    SLEEP   26-11+8
+    SLEEP   26-11+8-1
 ;    ldy     #4
 ;.loopWait
 ;    dey
@@ -604,20 +613,21 @@ LoopPatch
 ;    bpl     .notHidden0         ; 2/3
 ;    NOP_W                       ; 1
 ;.notHidden0
-    lda     chamCol0            ; 3 = 11
-
-    ldy     chamCol1            ; 3
-    stx     GRP0                ; 3                 VDELed!
-    stx     NUSIZ0              ; 3          @75    X = 0
+                                ;           @62
+    ldy     chamColor1          ; 3
+    stx     GRP0                ; 3                 VDELed! X = 0
+    lda     Col0 + 1 - PD       ; 3
+    stx     NUSIZ0              ; 3         @74     @>=73!
 ;---------------------------------------
+    sta     COLUBK              ; 3 = 15    @01
+    lda     chamColor0          ; 3
     stx     NUSIZ1              ; 3
     sta     COLUP0              ; 3
     sty     COLUP1              ; 3
-    stx     GRP1                ; 3 = 12
-    lda     Col0 + 1 - PD       ; 3
+    stx     GRP1                ; 3 = 15
+    sta     HMOVE               ; 3 =  3    @19!    +5
+    tsx                         ; 2
     ldy     #CELL_H-1           ; 2
-    sta     HMOVE               ; 3 =  8    @19!    +5
-    sta.w   COLUBK              ; 4
     jmp     EnterKernel         ; 3 =  7    @26!
 
 ExitKernel0                     ;           @02
@@ -631,9 +641,6 @@ ExitKernel0                     ;           @02
     jmp     ContKernel0         ; 3 =  3    @21
 
 .exitLoop
-    sta     WSYNC
-    sta     WSYNC
-;    jmp     EXIT
 
 ;---------------------------------------------------------------
 ; *** Draw energy bar ***
@@ -670,47 +677,47 @@ ExitKernel0                     ;           @02
     stx     PF0
     stx     PF1
     stx     PF2
-    stx     NUSIZ1              ; 2
+;    stx     NUSIZ1              ; 2
     lda     #%100001            ; 2         quad size ball, reflected PF
     sta     CTRLPF              ; 3
     lda     #$70                ; 2         -7
     sta     HMP1                ; 3
-    stx     GRP1                ; 3
-    stx     COLUP1
+;    stx     GRP1                ; 3
+;    stx     COLUP1
 ; pre-prepare digit kernel:
-    lda     #%011               ; 2
-    sta     NUSIZ0              ; 3
+;    lda     #%011               ; 2
+;    sta     NUSIZ0              ; 3
 ;    sta     VDELP0              ; 3
     stx     HMP0                ; 3
-    ldy     #$0e                ; 2         TODO? make variable?
-    sty     COLUP0              ; 3
+;    ldy     #$0e                ; 2         TODO? make variable?
+;    sty     COLUP0              ; 3
 
-    lda     timerHi             ; 3
-    clc
-    adc     #6                  ; 2
-    sta     WSYNC               ; 3 = 32    @52
-;---------------------------------------
-    sta     RESP1               ; 3         prepare border sprite for energy bar
-    stx     GRP1                ; 3         clear P0 & P1
-WaitBar
-    sbc     #$0f                ; 2
-    bcs     WaitBar             ; 2/3
-    CHECKPAGE WaitBar
-
-    tay                         ; 2
-    lda     HmTbl,y             ; 4
-    sta     HMBL                ; 3
-    sta.w   RESBL               ; 4         @23..73!
-    sta     WSYNC
-;---------------------------------------
-    sta     HMOVE               ; 3
-    stx     COLUP1              ; 2 =  5    X = 0
+;    lda     timerHi             ; 3
+;    clc
+;    adc     #6                  ; 2
+;    sta     WSYNC               ; 3 = 32    @52
+;;---------------------------------------
+;    sta     RESP1               ; 3         prepare border sprite for energy bar
+;    nop     GRP1                ; 3         clear P0 & P1
+;WaitBar
+;    sbc     #$0f                ; 2
+;    bcs     WaitBar             ; 2/3
+;    CHECKPAGE WaitBar
+;
+;    tay                         ; 2
+;    lda     HmTbl,y             ; 4
+;    sta     HMBL                ; 3
+;    sta.w   RESBL               ; 4         @23..73!
+;    sta     WSYNC
+;;---------------------------------------
+;    sta     HMOVE               ; 3
+;;    stx     COLUP1              ; 2 =  5    X = 0
     lda     timerHi             ; 3
     lsr                         ; 2
     lsr                         ; 2
     tay                         ; 2
     lda     #$ff                ; 2 = 11
-    sta     GRP1                ; 3
+;    sta     GRP1                ; 3
     cpy     #3                  ; 2
     bcc     .below3             ; 2/3
     stx     .pf0a               ; 3         X = 0
@@ -761,6 +768,72 @@ WaitBar
     sta     .pf1b
 .setPF0b
     tay                         ; 2 =  2    @..65
+
+    sta     WSYNC
+;---------------------------------------
+    sta     WSYNC
+;---------------------------------------
+    sta     WSYNC
+;---------------------------------------
+;    sta     WSYNC
+;---------------------------------------
+;    ldx     #$00                ; 2 = 11
+;    stx     COLUP1
+;    stx     GRP1
+;    stx     GRP0
+;    stx     NUSIZ1              ; 2
+;
+;    dex
+;    stx     GRP1                ; 3         clear P0 & P1
+;
+;    lda     #%011               ; 2
+;    sta     NUSIZ0              ; 3
+;    lda     #$0e                ; 2         TODO? make variable?
+;    sta     COLUP0              ; 3
+
+    ldx     #0
+;    stx     GRP0
+;    stx     GRP1
+    lda     timerHi             ; 3
+    clc                         ; 2
+    adc     #6                  ; 2
+    sta     WSYNC               ; 3 = 32    @52
+;---------------------------------------
+    sta     RESP1               ; 3         prepare border sprite for energy bar
+    stx.w   GRP0
+WaitBar
+    sbc     #$0f                ; 2
+    bcs     WaitBar             ; 2/3
+    CHECKPAGE WaitBar
+
+    tax                         ; 2
+    lda     HmTbl,x             ; 4
+    sta     HMBL                ; 3
+    sta     RESBL               ; 3         @23..73!
+    sta     WSYNC
+;---------------------------------------
+    sta     HMOVE               ; 3
+;    stx     COLUP1              ; 2 =  5    X = 0
+
+
+    ldx     #$00                ; 2 = 11
+    stx     COLUP1
+    stx     GRP1
+    stx     GRP0
+    stx     NUSIZ1              ; 2
+
+    dex
+    stx     GRP1                ; 3         clear P0 & P1
+
+    lda     #%011               ; 2
+    sta     NUSIZ0              ; 3
+    lda     #$0e                ; 2         TODO? make variable?
+    sta     COLUP0              ; 3
+
+
+
+
+
 
     ldx     #BAR_HEIGHT         ; 3
     lda     .noTimerCol         ; 3
@@ -865,7 +938,7 @@ LoopScore                       ;           @66
     sta     ENABL               ; 3
     sta     GRP0                ; 3
     sta     GRP1                ; 3
-;    sty     GRP0                ; 3
+    sta     GRP0                ; 3
 ;    sta     VDELP0              ; 3
     sta     VDELP1              ; 3
     sta     COLUPF              ; 3 = 18    @04
@@ -1187,7 +1260,7 @@ TIM_OVS
     lsr
     lsr
     tay
-    lda     targetColor0                ; chamCol0
+    lda     targetColor0                ; chamColor0
     lsr
     lsr
     lsr
@@ -1211,7 +1284,7 @@ TIM_OVS
     lda     colorLst_R+NUM_CELLS/2
     and     #$0f
     sta     .tmpVal
-    lda     targetColor0                ; chamCol0
+    lda     targetColor0                ; chamColor0
     and     #$0f
     sec
     sbc     .tmpVal
@@ -1239,6 +1312,9 @@ TIM_OVS
     bne     .skipTimerHi
     lda     #GAME_OVER|SELECT_MODE
     sta     gameState
+    lda     #0
+    sta     targetColor0
+    sta     chamColor0
 ; play end of game sound:
     lda     #BONUS_SOUND_LEN
     sta     soundIdx0
@@ -1315,7 +1391,7 @@ MAX_VAL_DIFF    = $02
     sta     gameState
 .skipEmpty
 ;    lda     targetColor0
-;    sta     chamCol0
+;    sta     chamColor0
 ;    lda     #CHAM_HIDDEN
 ;    sta     chamState0
     jsr     GetRandomCellIdx
@@ -2122,18 +2198,18 @@ GetRandomCellIdx SUBROUTINE
 ;---------------------------------------------------------------
 GameInit SUBROUTINE
 ;---------------------------------------------------------------
-    lda     #4
+    lda     #8
     sta     xPlayer0
     lda     #3
     sta     yPlayer0
-    lda     #1
-    sta     xPlayer1
     lda     #8
+    sta     xPlayer1
+    lda     #0
     sta     yPlayer1
     lda     #$0e
-    sta     chamCol0
+    sta     chamColor0
     lda     #$ac
-    sta     chamCol1
+    sta     chamColor1
 
     ldx     #KernelCodeEnd-KernelCode-1
 .loopCopy
