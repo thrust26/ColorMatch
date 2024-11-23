@@ -317,23 +317,18 @@ _END_TMP SET .
 .gfxPtr0    ds 2
 .gfxPtr1    ds 2
     END_TMP
-;.enterKernel
 .loopKernel                     ;           @73
-    bne     .contKernel         ; 2/3
-    jmp     ExitKernel0         ; 3 =  5    @02
-
-.contKernel                     ;           @00
     lda     #$00                ; 2                 black r
-    sta     COLUBK              ; 3 =  5    @05     black w
+    sta     COLUBK              ; 3 =  5    @02     black w
 ;ChamGfx0
 ;    lda     Chameleon,y         ; 4
     lda     (.gfxPtr0),y        ; 5
-    sta     GRP0                ; 3
-    lda     (.gfxPtr1),y        ; 5
+    sta     GRP0                ; 3         @10
 ;ChamGfx1
 ;    lda     Chameleon,y         ; 4
-;    nop                         ; 2
-    sta     GRP1                ; 3 = 16
+    lda     (.gfxPtr1),y        ; 5
+    sta.w   GRP1                ; 4 = 17    @19
+    cpy     #3                  ; 2 =  2
 .contKernel0                    ;           @21
 Col0
     lda     #$00                ; 2                 #0r
@@ -364,7 +359,7 @@ Col8
     lda     #$00                ; 2                 #8r
     sta     COLUBK              ; 3 = 21    @68!    #8w
     dey                         ; 2
-    bpl     .loopKernel         ; 3/2
+    bcs     .loopKernel         ; 3/2
     jmp     ExitKernel          ; 3         @75
 KernelCodeEnd
 
@@ -501,9 +496,7 @@ TIM_DIGITS_END
     jsr     PrepareTargetBars
     stx     GRP0                ;           VDELed!
 
-    lda     targetColor0        ; 3
-    sta     COLUP0              ; 3
-    lda     targetColor1        ; 4 = 10
+    lda     .tmpGfx1           ; 4 = 10
 .waitTim
     ldy     INTIM
     bne     .waitTim
@@ -516,20 +509,28 @@ TIM_DIGITS_END
 .exitLoopJmp
     jmp     .exitLoop
 ;---------------------------------------------------------------
+.bottom1                        ;           @02
+    lda     #0                  ; 2
+    sta     COLUBK              ; 3 =  5    @07
+    lda     #%110101            ; 2                 double width players, 8 pixel ball (4 would do too)
+    sta     NUSIZ0              ; 3
+    sta     NUSIZ1              ; 3
+    stx     GRP0                ; 3 = 11            VDELed
+    jmp     ContKernel0         ; 3 =  3    @21
+
 ; kernel loops to here
 ExitKernel                      ;           @75
-    iny                         ; 2
-;---------------------------------------
+    bne     .bottom1            ; 2/3
+    sta     HMOVE               ; 3 =  5    @04
     sty     COLUBK              ; 3
 ; enable target cursor:         ;           @04
-    lda     targetColor1        ; 3 =  8
-.enterLoop                      ;           @07!
+    lda     .tmpGfx1            ; 3
+.enterLoop                      ;           @07
+    sta     GRP1                ; 3 =  9
+    lda     targetColor1        ; 3
     sta     COLUP1              ; 3
     lda     targetColor0        ; 3
-    sta     COLUP0              ; 3 =  9
-    stx     GRP0                ; 3                 VDELed
-    lda     .tmpGfx1            ; 3
-    sta     GRP1                ; 3 =  9    @25!    (goal < @26)
+    sta     COLUP0              ; 3 = 12    @25!    (goal < @26)
 ; restore stack pointer:
     ldx     #$ff                ; 2
     txs                         ; 2
@@ -601,8 +602,7 @@ LoopPatch
     sta     HMP0                ; 3
     sta     HMP1                ; 3 = 13
 
-;    SLEEP   26
-    SLEEP   26-11+8-1
+    SLEEP   22
 ;    ldy     #4
 ;.loopWait
 ;    dey
@@ -629,16 +629,6 @@ LoopPatch
     tsx                         ; 2
     ldy     #CELL_H-1           ; 2
     jmp     EnterKernel         ; 3 =  7    @26!
-
-ExitKernel0                     ;           @02
-; preload cursor (16 cycles):
-    sta     HMOVE               ; 3         @05     -5
-    sty     COLUBK              ; 3 =  6    @08     Y = 0
-    tsx                         ; 2                 the only slot to get SP into X
-    lda     #%110101            ; 2                 double width players, 8 pixel ball (4 would do too)
-    sta     NUSIZ0              ; 3
-    sta     NUSIZ1              ; 3 = 10    @18
-    jmp     ContKernel0         ; 3 =  3    @21
 
 .exitLoop
 
@@ -2198,9 +2188,9 @@ GetRandomCellIdx SUBROUTINE
 ;---------------------------------------------------------------
 GameInit SUBROUTINE
 ;---------------------------------------------------------------
-    lda     #8
+    lda     #0
     sta     xPlayer0
-    lda     #3
+    lda     #6
     sta     yPlayer0
     lda     #8
     sta     xPlayer1
