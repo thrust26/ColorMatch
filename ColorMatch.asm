@@ -37,8 +37,8 @@
 ; - change controls (move players instead of cells)
 ; - let chameleon adapt to current cell (drains time)
 ; - display adapted chameleon
-; - overlap bottom most target cursor with bar preparation
 ; ? while adapting chameleon cannot move
+; - make code 2 player ready (loop over X)
 
 ; DONEs:
 ; + game variations:
@@ -65,7 +65,8 @@
 ;     + ignore both cases
 ; + check round bonus score conversion
 ; + improve progess bar (6 digits + bar)
-; x improve remaining cells display (e.g. sprite over colored ball |B|)
+; + improve remaining cells display (colored ball)
+; + overlap bottom most target cursor with bar preparation
 
 START_GAME      = 0
 START_ROUND     = 0 ; NUM_ROUNDS-1
@@ -304,11 +305,14 @@ _END_TMP SET _TMP_ORG
   ENDM
 
   MAC END_TMP
+    LIST OFF
 _END_TMP SET .
     IF . > tmpVars + NUM_TMPS
+    LIST ON
       ECHO "ERROR: too many tmpVars!", . - tmpVars + NUM_TMPS
       ERR
     ENDIF
+    LIST ON
     SEG     Bank0
   ENDM
 
@@ -542,17 +546,17 @@ ExitKernel                      ;           @75
     jsr     PrepareTargetBars   ;
     txs                         ; 2 = ???
 ; setup chameleon pointers:
-    lda     #<NoChameleon+1     ; 2
+    lda     #<NoChameleon       ; 2
     cpy     yPlayer1            ; 3
     bne     .emptyP1            ; 2/3
-    lda     #<Chameleon+1       ; 2
+    lda     #<Chameleon         ; 2
 .emptyP1
     sta     .gfxPtr1
 ;    sta     ChamGfx1 + 1 - PD   ; 3 = 11/12
-    lda     #<NoChameleon+1     ; 2
+    lda     #<NoChameleon       ; 2
     cpy     yPlayer0            ; 3
     bne     .emptyP0            ; 2/3
-    lda     #<Chameleon+1       ; 2
+    lda     #<Chameleon         ; 2
 ;    bit     chamState0          ;           CHAM_HIDDEN?
 ;    bpl     .emptyP0            ;
 ;    lda     #<Chameleon0+1      ; 2
@@ -627,7 +631,7 @@ LoopPatch
     stx     GRP1                ; 3 = 15
     sta     HMOVE               ; 3 =  3    @19!    +5
     tsx                         ; 2
-    ldy     #CELL_H-1           ; 2
+    ldy     #CELL_H             ; 2
     jmp     EnterKernel         ; 3 =  7    @26!
 
 .exitLoop
@@ -663,51 +667,16 @@ LoopPatch
     sty     .timerCol       ; 3 = 18
 
     ldx     #%000               ; 2
-    stx     ENABL
-    stx     PF0
-    stx     PF1
-    stx     PF2
-;    stx     NUSIZ1              ; 2
     lda     #%100001            ; 2         quad size ball, reflected PF
     sta     CTRLPF              ; 3
     lda     #$70                ; 2         -7
     sta     HMP1                ; 3
-;    stx     GRP1                ; 3
-;    stx     COLUP1
-; pre-prepare digit kernel:
-;    lda     #%011               ; 2
-;    sta     NUSIZ0              ; 3
-;    sta     VDELP0              ; 3
     stx     HMP0                ; 3
-;    ldy     #$0e                ; 2         TODO? make variable?
-;    sty     COLUP0              ; 3
-
-;    lda     timerHi             ; 3
-;    clc
-;    adc     #6                  ; 2
-;    sta     WSYNC               ; 3 = 32    @52
-;;---------------------------------------
-;    sta     RESP1               ; 3         prepare border sprite for energy bar
-;    nop     GRP1                ; 3         clear P0 & P1
-;WaitBar
-;    sbc     #$0f                ; 2
-;    bcs     WaitBar             ; 2/3
-;    CHECKPAGE WaitBar
-;
-;    tay                         ; 2
-;    lda     HmTbl,y             ; 4
-;    sta     HMBL                ; 3
-;    sta.w   RESBL               ; 4         @23..73!
-;    sta     WSYNC
-;;---------------------------------------
-;    sta     HMOVE               ; 3
-;;    stx     COLUP1              ; 2 =  5    X = 0
     lda     timerHi             ; 3
     lsr                         ; 2
     lsr                         ; 2
     tay                         ; 2
     lda     #$ff                ; 2 = 11
-;    sta     GRP1                ; 3
     cpy     #3                  ; 2
     bcc     .below3             ; 2/3
     stx     .pf0a               ; 3         X = 0
@@ -765,78 +734,48 @@ LoopPatch
 ;---------------------------------------
     sta     WSYNC
 ;---------------------------------------
-;    sta     WSYNC
-;---------------------------------------
-;    ldx     #$00                ; 2 = 11
-;    stx     COLUP1
-;    stx     GRP1
-;    stx     GRP0
-;    stx     NUSIZ1              ; 2
-;
-;    dex
-;    stx     GRP1                ; 3         clear P0 & P1
-;
-;    lda     #%011               ; 2
-;    sta     NUSIZ0              ; 3
-;    lda     #$0e                ; 2         TODO? make variable?
-;    sta     COLUP0              ; 3
-
-    ldx     #0
-;    stx     GRP0
-;    stx     GRP1
+    ldx     #0                  ; 2
+    stx     GRP0                ; 3
     lda     timerHi             ; 3
     clc                         ; 2
     adc     #6                  ; 2
     sta     WSYNC               ; 3 = 32    @52
 ;---------------------------------------
     sta     RESP1               ; 3         prepare border sprite for energy bar
-    stx.w   GRP0
+    stx.w   GRP1                ;           clear P0 & P1
 WaitBar
     sbc     #$0f                ; 2
     bcs     WaitBar             ; 2/3
     CHECKPAGE WaitBar
-
     tax                         ; 2
     lda     HmTbl,x             ; 4
     sta     HMBL                ; 3
     sta     RESBL               ; 3         @23..73!
-    sta     WSYNC
+    sta     WSYNC               ; 3
 ;---------------------------------------
     sta     HMOVE               ; 3
-;    stx     COLUP1              ; 2 =  5    X = 0
-
-
-    ldx     #$00                ; 2 = 11
+    ldx     #$00                ; 2 =  5
     stx     COLUP1
     stx     GRP1
-    stx     GRP0
+    stx     GRP0                ;           clear P0 & P1
     stx     NUSIZ1              ; 2
-
     dex
-    stx     GRP1                ; 3         clear P0 & P1
+    stx     GRP1                ; 3
 
+; pre-prepare digit kernel:
     lda     #%011               ; 2
     sta     NUSIZ0              ; 3
     lda     #$0e                ; 2         TODO? make variable?
     sta     COLUP0              ; 3
 
-
-
-
-
-
     ldx     #BAR_HEIGHT         ; 3
-    lda     .noTimerCol         ; 3
-    sta     COLUPF              ; 2
 .loopBar
     sta     WSYNC               ; 3 =  9
 ;---------------------------------------
-    nop                         ; 2
+    lda     .noTimerCol         ; 3
+    sta.w   COLUPF              ; 4
     lda     .timerCol           ; 3
-    sta     COLUBK              ; 3
-    lda     #%10                ; 2
-    sta     ENABL               ; 3 = 13
-
+    sta     COLUBK              ; 3 = 13
     lda     .pf0a               ; 3
     sta     PF0                 ; 3         @19
     lda     .pf1a               ; 3
@@ -1100,14 +1039,13 @@ DEBUG2
     lda     #0
     sta     gameState
     beq     .contStopped
-;    NOP_W
+
 .startNextRound
     lda     #GAME_RUNNING
     sta     gameState
-DEBUG1
-    jsr     GetRandomCellIdx    ; extra stack usage only here!
+    jsr     GetRandomColorIdx   ; extra stack usage only here!
     sta     targetColor0
-    jsr     GetRandomCellIdx    ; extra stack usage only here!
+    jsr     GetRandomColorIdx   ; extra stack usage only here!
     sta     targetColor1
 .contStopped
     jmp     .skipRunning
@@ -1117,9 +1055,78 @@ DEBUG1
 ;---------------------------------------------------------------
 .checkInput
     START_TMP
-.tmpSwchA   ds 1
+;.tmpSwchA   ds 1
+.tmpXPlayer     ds 1
+.tmpYPlayer     ds 1
     END_TMP
 TIM_S
+
+    lax     SWCHA
+; control repeat rate
+    cmp     #$ff
+    lda     moveSum
+    bcc     .dirPressed
+    lda     #MOVE_SPEED-1       ; reset move delay
+.dirPressed
+    sbc     #MOVE_SPEED-1
+    sta     moveSum
+    bcs     .skipDirs
+; move player:
+    txa
+    ldy     xPlayer0
+    asl
+    bcs     .skipRight
+    iny
+    cpy     #NUM_COLS
+    bcc     .setXPlayer
+    ldy     #0
+    bpl     .setXPlayer
+
+.skipRight
+    bmi     .skipLeft
+    dey
+    bpl     .setXPlayer
+    ldy     #NUM_COLS-1
+.setXPlayer
+.skipLeft
+    sty     .tmpXPlayer
+    ldy     yPlayer0
+    asl
+    asl
+    bcs     .skipDown
+    dey
+    bpl     .setYPlayer
+    ldy     #NUM_ROWS-1
+    bpl     .setYPlayer
+
+.skipDown
+    bmi     .skipUp
+    iny
+    cpy     #NUM_ROWS
+    bcc     .setYPlayer
+    ldy     #0
+.setYPlayer
+.skipUp
+    sty     .tmpYPlayer
+  IF BLOCK_CELLS
+    lda     roundFlags                  ;           BLOCK_FLAG?
+    bpl     .skipBlockR
+    lda     MultTbl,y
+    clc
+    adc     .tmpXPlayer
+    tay
+    lda     colorLst_R,y
+    beq     .skipMove
+.skipBlockR
+  ENDIF
+    lda     .tmpXPlayer
+    sta     xPlayer0
+    lda     .tmpYPlayer
+    sta     yPlayer0
+.skipMove
+
+
+  IF 0 ;{
     lax     SWCHA
     bit     SWCHB
     bvs     .normalDirs
@@ -1151,6 +1158,7 @@ TIM_S
   ENDIF ;}
 ;    lda     #0
 ;    sta     chamState0
+  ENDIF ;}
     lda     #GAME_RUNNING       ; remove IN_FOUND_CELL flag
     sta     gameState
 .skipDirs
@@ -1200,7 +1208,7 @@ ContKernel
 OverScan SUBROUTINE
 ;---------------------------------------------------------------
   IF NTSC_TIM
-    lda     #36-1-7
+    lda     #36-1-9
   ELSE
     lda     #63
   ENDIF
@@ -1216,35 +1224,24 @@ TIM_OVS
 ; Decrease Timer
 ;---------------------------------------------------------------
     START_TMP
-.hueDiff    ds 1
-.tmpVal     ds 1
+.tmpColorIdx    ds 1
+.tmpColor       ds 1
+.tmpVal         ds 1
+.hueDiff        ds 1
+.valDiff        ds 1
+.tmpDiff        ds 1
     END_TMP
 
-    lda     colorLst_R+NUM_CELLS/2      ; EMPTY_COL?
-    bne     .calcDiff                   ;  no, normal calculation
-    bit     roundFlags                  ; BURN_EMPTY?
-    bvc     .calcDiff0                  ;  no, used fixed energy rate
-    lda     gameState                   ; in found cell?
-    and     #IN_FOUND_CELL              ;
-    bne     .calcDiff0                  ;  yes, used fixed energy rate
-    lda     soundIdx1
-    bne     .skipBurnSound
-    sta     AUDF1
-    lda     #$4
-    sta     AUDV1
-    lda     #$08
-    sta     AUDC1
-    inc     soundIdx1
-.skipBurnSound
-    lda     #TIMER_SPEED * 8            ; 26 * 8 = 208
-    bne     .contDecTimer
-
-; calculate hue difference:
-.calcDiff0
-    lda     #8
-    bne     .contDecTimer
-
-.calcDiff
+; get cell-index and -color:
+    ldy     yPlayer0
+    lda     MultTbl,y
+    clc
+    adc     xPlayer0
+    sta     .tmpColorIdx
+    tay
+    lda     colorLst_R,y                ; EMPTY_COL?
+    sta     .tmpColor
+; calculate hue-diff:
     lsr
     lsr
     lsr
@@ -1270,10 +1267,24 @@ TIM_OVS
     adc     #NUM_COLS+1-1
 .hueOk
     sta     .hueDiff
-; calculate value difference:
-    lda     colorLst_R+NUM_CELLS/2
+; calculate value-diff:
+    lda     .tmpColor
     and     #$0f
     sta     .tmpVal
+   IF SKIPPED_VAL = 1
+; use value-diff table if values are skipped
+    lda     targetColor0
+    and     #$0f
+    tay
+    lda     ValIdxTbl,y
+    ldy     .tmpVal
+    sec
+    sbc     ValIdxTbl,y
+    bcs     .posValDiff
+    eor     #$ff
+    adc     #1
+.posValDiff
+   ELSE ;{
     lda     targetColor0                ; chamColor0
     and     #$0f
     sec
@@ -1283,14 +1294,44 @@ TIM_OVS
     adc     #1
 .posValDiff
     lsr
-.wait4ever
+.wait4ever                              ; DEBUG, remove!
     bcs     .wait4ever
+   ENDIF ;}
+    sta     .valDiff
+; calculate timer-speed:
+    lda     .tmpColor                   ; EMPTY_COL?
+    bne     .calcDiff                   ;  no, normal calculation
+    bit     roundFlags                  ; BURN_EMPTY?
+    bvc     .calcDiff0                  ;  no, used fixed energy rate
+    lda     gameState                   ; in found cell?
+    and     #IN_FOUND_CELL              ;
+    bne     .calcDiff0                  ;  yes, used fixed energy rate
+    lda     soundIdx1
+    bne     .skipBurnSound
+    sta     AUDF1
+    lda     #$4
+    sta     AUDV1
+    lda     #$08
+    sta     AUDC1
+    inc     soundIdx1
+.skipBurnSound
+    lda     #TIMER_SPEED * 8            ; 26 * 8 = 208
+    bne     .contDecTimer
+
+; calculate hue difference:
+.calcDiff0
+    lda     #8
+    bne     .contDecTimer
+
+.calcDiff
+    lda     .valDiff
+    clc
     adc     .hueDiff                    ; 1..4 + 1..6 = 2..10 (was: 1..6 + 1..7 = 2..13)
-    sta     .hueDiff
+    sta     .tmpDiff
     asl                                 ; 4..20 (was: 4..26)
-    adc     .hueDiff                    ; 6..30
+    adc     .tmpDiff                    ; 6..30
     asl                                 ; 12..60 (was: 8..52)
-;    adc     #12
+;    adc     #6
 .contDecTimer
     clc
     adc     timerLo
@@ -1313,15 +1354,15 @@ TIM_OVS
     lda     #$14
     sta     AUDF0
 .skipTimerHi
-
 ;---------------------------------------------------------------
 ; Check for match
 ;---------------------------------------------------------------
 ; check for color match (TODO: can be done every 2nd frame)
+    lda     .tmpColor
     bit     SWCHB
     bpl     .coarseCheck
-    ldx     #NUM_CELLS/2
-    lda     colorLst_R+NUM_CELLS/2
+;    ldx     #NUM_CELLS/2
+;    lda     colorLst_R+NUM_CELLS/2
     cmp     targetColor0
     beq     .foundTargetCol
     jmp     .skipNewCol
@@ -1329,54 +1370,38 @@ TIM_OVS
 .coarseCheck
 ; check if any cell nearby is close (delta hue OR (todo) delta val <= 2)
 ;.tmpDiff    = tmpVars
-MAX_HUE_DIFF    = $01
-MAX_VAL_DIFF    = $02
+MAX_HUE_DIFF    = $01   ; one step
+   IF SKIPPED_VAL = 1
+MAX_VAL_DIFF    = $01   ; one step
+   ELSE
+MAX_VAL_DIFF    = $02   ; one step
+   ENDIF
 
-; compare hue:
+; compare hues:
 .checkHue
-    lda     targetColor0
-    lsr
-    lsr
-    lsr
-    lsr
-    tay
-    lda     colorLst_R+NUM_CELLS/2
-    lsr
-    lsr
-    lsr
-    lsr
-    tax
-    lda     HueIdx,y
-    sec
-    sbc     HueIdx,x                    ; same hue?
+    lda     .hueDiff                    ; same hue?
     beq     .checkRangeValue            ;  yes, check value +/-2
-    adc     #MAX_HUE_DIFF               ; -2 -> -1x; -1 -> 0; 0 -> 2; 1 -> 3; 2 -> 4x
-    cmp     #MAX_HUE_DIFF*2+1+1         ; difference <= 1?
+    cmp     #MAX_HUE_DIFF+1             ; difference <= 1?
     bcc     .checkSameValue             ;  yes, check for same value
     bcs     .skipNewCol                 ;  no, no match
 
 ; compare value:
-.checkRangeValue    ; hue is the same
-    lda     targetColor0
-    sec
-    sbc     colorLst_R+NUM_CELLS/2
-    clc
-    adc     #MAX_VAL_DIFF
-    cmp     #MAX_VAL_DIFF*2+1
+.checkRangeValue    ; hues are the same
+    lda     .valDiff
+    cmp     #MAX_VAL_DIFF+1
     bcs     .skipNewCol                 ;  no, no match
     bcc     .foundTargetCol             ;  yes, match!
 
 .checkSameValue
-    lda     targetColor0
-    eor     colorLst_R+NUM_CELLS/2
-    and     #$0f
+    lda     .valDiff
     bne     .skipNewCol                 ;  no, no match
 .foundTargetCol
     lda     roundFlags
     and     #BLOCK_EMPTY|BURN_EMPTY
     beq     .skipEmpty
+    ldy     .tmpColorIdx
     lda     #EMPTY_COL
-    sta     colorLst_W+NUM_CELLS/2
+    sta     colorLst_W,y
     lda     #GAME_RUNNING|IN_FOUND_CELL
     sta     gameState
 .skipEmpty
@@ -1384,7 +1409,8 @@ MAX_VAL_DIFF    = $02
 ;    sta     chamColor0
 ;    lda     #CHAM_HIDDEN
 ;    sta     chamState0
-    jsr     GetRandomCellIdx
+; TODO: compare with current target color
+    jsr     GetRandomColorIdx
     sta     targetColor0
 ; increase score:
     lda     #$00
@@ -1567,9 +1593,12 @@ TMP_BASE    = .             ; .tmpObst has to be preserved until the end of obst
     lda     .tmpObst
     and     #SWAP_FOUND
     beq     .skipSwapCells
-    jsr     GetRandomCellIdx
+    jsr     GetRandomColorIdx
     stx     .xCell0
-    jsr     GetRandomCellIdx
+.repeatCell1
+    jsr     GetRandomColorIdx
+    cpx     .xCell0
+    beq     .repeatCell1
     ldy     .xCell0
     lda     colorLst_R,x
     pha
@@ -1579,10 +1608,10 @@ TMP_BASE    = .             ; .tmpObst has to be preserved until the end of obst
     sta     colorLst_W,y
 .skipSwapCells
 
-;    lda     roundFlags
 ;---------------------------------------------------------------
 ; Swap Columns
 ;---------------------------------------------------------------
+;    lda     roundFlags
     lda     .tmpObst
     and     #SWAP_COLS
     beq     .skipSwapCols
@@ -2163,7 +2192,7 @@ SaveLeftColumn
     rts
 
 ;---------------------------------------------------------------
-GetRandomCellIdx SUBROUTINE
+GetRandomColorIdx SUBROUTINE
 ;---------------------------------------------------------------
 ; uses:    A, X
 ; returns: A = color, X = index
@@ -2188,11 +2217,11 @@ GetRandomCellIdx SUBROUTINE
 ;---------------------------------------------------------------
 GameInit SUBROUTINE
 ;---------------------------------------------------------------
-    lda     #0
-    sta     xPlayer0
-    lda     #6
-    sta     yPlayer0
     lda     #8
+    sta     xPlayer0
+    lda     #0
+    sta     yPlayer0
+    lda     #0
     sta     xPlayer1
     lda     #0
     sta     yPlayer1
@@ -2372,8 +2401,8 @@ NextRandom SUBROUTINE
     rts
 ; NextRandom
 
-;    ALIGN_FREE_LBL  256, "SetXPos"
-;
+    ALIGN_FREE_LBL  256, "SetXPos"
+
 ;---------------------------------------------------------------
 SetXPos SUBROUTINE
 ;---------------------------------------------------------------
@@ -2609,6 +2638,7 @@ HueIdx = . - 2
 
 LumTbl
   IF NTSC
+SKIPPED_VAL = 1
     .byte   $00
     .byte   $02
     .byte   $04
@@ -2617,7 +2647,19 @@ LumTbl
     .byte   $0a
 ;    .byte   $0c    ; skipped
     .byte   $0e
-  ELSE
+   IF SKIPPED_VAL = 1
+ValIdxTbl
+    ds  2, $00
+    ds  2, $01
+    ds  2, $02
+    ds  2, $03
+    ds  2, $04
+    ds  2, $05
+    ds  2, $ff          ; skipped
+    ds  2, $06
+   ENDIF
+  ELSE ;/NTSC
+SKIPPED_VAL = 1
     .byte   $00
     .byte   $02
     .byte   $04
@@ -2626,6 +2668,17 @@ LumTbl
     .byte   $0a     ; seems identical with $0c on Sony CRT
 ;    .byte   $0c    ; skipped
     .byte   $0e
+   IF SKIPPED_VAL = 1
+ValIdxTbl
+    ds  2, $00
+    ds  2, $01
+    ds  2, $02
+    ds  2, $03
+    ds  2, $04
+    ds  2, $05
+    ds  2, $ff          ; skipped
+    ds  2, $06
+   ENDIF
   ENDIF
 
 TimerR
