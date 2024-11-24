@@ -90,7 +90,6 @@ ILLEGAL         = 1
 DEBUG           = 1
 
 BLOCK_CELLS     = 1
-CHECK_MOVED     = 0 ; (-14) check if player was not blocked (currently superfluous)
 
 SAVEKEY         = 0 ; (-~220) support high scores on SaveKey
 PLUSROM         = 0 ; (-~50)
@@ -510,9 +509,10 @@ TIM_DIGITS_END
     beq     .enterLoop          ; 3         @06
     DEBUG_BRK
 
-.exitLoopJmp
-    jmp     .exitLoop
 ;---------------------------------------------------------------
+;.exitLoopJmp
+;    jmp     .exitLoop
+
 .bottom1                        ;           @02
     lda     #0                  ; 2
     sta     COLUBK              ; 3 =  5    @07
@@ -524,7 +524,7 @@ TIM_DIGITS_END
 
 ; kernel loops to here
 ExitKernel                      ;           @75
-    bne     .bottom1            ; 2/3
+    bne     .bottom1            ; 2/3               Idea: bmi could work here too
     sta     HMOVE               ; 3 =  5    @04
     sty     COLUBK              ; 3
 ; enable target cursor:         ;           @04
@@ -540,7 +540,7 @@ ExitKernel                      ;           @75
     txs                         ; 2
 ; loop:
     dec     .rowCount           ; 3
-    bmi     .exitLoopJmp        ; 2/3
+    bmi     .exitLoop;Jmp       ; 2/3
     ldy     .rowCount           ;  =  3
 ; calculate for new row:
     jsr     PrepareTargetBars   ;
@@ -634,9 +634,9 @@ LoopPatch
     ldy     #CELL_H             ; 2
     jmp     EnterKernel         ; 3 =  7    @26!
 
-.exitLoop
-
 ;---------------------------------------------------------------
+.exitLoop                       ;           @37
+
 ; *** Draw energy bar ***
     START_TMP tmpVars + DIGIT_BYTES
 .pf0a       ds 1
@@ -650,28 +650,39 @@ LoopPatch
 .noTimerCol = $ff-1
 
 ; prepare energy bar (1/2):
-    lda     #NO_TIMER_COL   ; 2
-    ldy     #TIMER_COL      ; 2
-    ldx     colorLst_R + NUM_CELLS/2;2
-    bne     .timerStdCol    ; 3/2
+    sta     WSYNC
+;---------------------------------------
+; setup timer colors:
+    ldy     yPlayer0
+    lda     RowOfsTbl,y
+    clc
+    adc     xPlayer0
+    tay
+; check if player is in empty, burning cell:
+    lda     #NO_TIMER_COL       ; 2
+    ldx     colorLst_R,y
+    bne     .timerStdCol        ; 3/2
     lda     gameState
     and     #IN_FOUND_CELL
-    bne     .timerStdCol    ; 3/2
+    bne     .timerStdCol        ; 3/2
     lda     roundFlags
     and     #BURN_EMPTY
     beq     .timerStdCol
-    lda     #NO_TIMER_CX_COL; 2
-    ldy     #TIMER_CX_COL   ; 2
+    lda     #NO_TIMER_CX_COL    ; 2
+    ldy     #TIMER_CX_COL       ; 2
+    NOP_W
 .timerStdCol
-    sta     .noTimerCol     ; 3
-    sty     .timerCol       ; 3 = 18
-
+    ldy     #TIMER_COL          ; 2
+    sta     .noTimerCol         ; 3
+    sty     .timerCol           ; 3
+    sta     WSYNC
+;---------------------------------------
     ldx     #%000               ; 2
     lda     #%100001            ; 2         quad size ball, reflected PF
     sta     CTRLPF              ; 3
     lda     #$70                ; 2         -7
+    sta     HMCLR               ; 3
     sta     HMP1                ; 3
-    stx     HMP0                ; 3
     lda     timerHi             ; 3
     lsr                         ; 2
     lsr                         ; 2
@@ -728,8 +739,6 @@ LoopPatch
 .setPF0b
     tay                         ; 2 =  2    @..65
 
-    sta     WSYNC
-;---------------------------------------
     sta     WSYNC
 ;---------------------------------------
     sta     WSYNC
@@ -872,10 +881,7 @@ LoopScore                       ;           @66
     sta     VDELP1              ; 3
     sta     COLUPF              ; 3 = 18    @04
 
-EXIT
     lda     #2
-;    sta     WSYNC
-;;---------------------------------------
     sta     VBLANK
     ldx     #$ff
     txs
@@ -885,13 +891,15 @@ EXIT
 ;---------------------------------------------------------------
 PrepareTargetBars ;SUBROUTINE
 ;---------------------------------------------------------------
+; target bars are drawn above and below player's row
     tya                         ; 2         6..0
     sec                         ; 2         7, 6 = 1; 6, 6 = 1;
     sbc     yPlayer1            ; 3         6..0
     cmp     #$02                ; 2
     ldx     #0                  ; 2
     bcs     .skipP1             ; 2/3
-    dex                         ; 2
+; show target bar for P1:
+    dex                         ; 2         %11111111
 .skipP1
     stx     .tmpGfx1
 
@@ -901,7 +909,8 @@ PrepareTargetBars ;SUBROUTINE
     cmp     #$02                ; 2
     ldx     #0                  ; 2
     bcs     .skipP0             ; 2/3
-    dex                         ; 2
+; show target bar for P0:
+    dex                         ; 2         %11111111
 .skipP0
     rts
 ; /PrepareTargetBars
@@ -913,21 +922,6 @@ KernelCode ; copied into RAM and patched there
     ALIGN_FREE_LBL   256, "PatchTbl"
 
 PatchTbl
-;    .byte   Col0 + 1 - PD
-;    .byte   Col1 + 1 - PD
-;    .byte   Col2 + 1 - PD
-;    .byte   Col3 + 1 - PD
-;    .byte   Col4 + 1 - PD
-;    .byte   .tmpColP0       ; -> COLUP0
-;    .byte   Col6 + 1 - PD
-;    .byte   Col7 + 1 - PD
-;    .byte   Col8 + 1 - PD
-;    .byte   .tmpColP1       ; -> COLUP1
-;    .byte   Col10 + 1 - PD
-;    .byte   Col11 + 1 - PD
-;    .byte   Col12 + 1 - PD
-;    CHECKPAGE_DATA PatchTbl
-;NUM_COLS    = . - PatchTbl ; 13
     .byte   Col0 + 1 - PD
     .byte   Col1 + 1 - PD
     .byte   Col2 + 1 - PD
@@ -1111,7 +1105,7 @@ TIM_S
   IF BLOCK_CELLS
     lda     roundFlags                  ;           BLOCK_FLAG?
     bpl     .skipBlockR
-    lda     MultTbl,y
+    lda     RowOfsTbl,y
     clc
     adc     .tmpXPlayer
     tay
@@ -1124,41 +1118,8 @@ TIM_S
     lda     .tmpYPlayer
     sta     yPlayer0
 .skipMove
-
-
-  IF 0 ;{
-    lax     SWCHA
-    bit     SWCHB
-    bvs     .normalDirs
-; reverse directions
-    lsr
-    and     #%01011111
-    sta     .tmpSwchA
-    txa
-    sec
-    rol
-    and     #%10101111
-    ora     .tmpSwchA
-    tax
-.normalDirs
-    cpx     #$ff
-    lda     moveSum
-    bcc     .dirPressed
-    lda     #MOVE_SPEED-1       ; reset move delay
-.dirPressed
-    sbc     #MOVE_SPEED-1
-    sta     moveSum
-    bcs     .skipDirs
-    bit     $ffff               ; set V-flag
-    jsr     ScrollCells
-  IF CHECK_MOVED ; {
-; check if player was able to move
-; currently superfluous, the player cannot be cannot be blocked in BURN_EMPTY games
-    bcc     .skipDirs
-  ENDIF ;}
 ;    lda     #0
 ;    sta     chamState0
-  ENDIF ;}
     lda     #GAME_RUNNING       ; remove IN_FOUND_CELL flag
     sta     gameState
 .skipDirs
@@ -1234,7 +1195,7 @@ TIM_OVS
 
 ; get cell-index and -color:
     ldy     yPlayer0
-    lda     MultTbl,y
+    lda     RowOfsTbl,y
     clc
     adc     xPlayer0
     sta     .tmpColorIdx
@@ -1259,7 +1220,6 @@ TIM_OVS
     bcs     .posHueDiff
     eor     #$ff
     adc     #1
-    sta     .hueDiff
 .posHueDiff
     cmp     #NUM_COLS/2+1
     bcc     .hueOk
@@ -1358,43 +1318,14 @@ TIM_OVS
 ; Check for match
 ;---------------------------------------------------------------
 ; check for color match (TODO: can be done every 2nd frame)
-    lda     .tmpColor
-    bit     SWCHB
-    bpl     .coarseCheck
-;    ldx     #NUM_CELLS/2
-;    lda     colorLst_R+NUM_CELLS/2
-    cmp     targetColor0
+    lda     .hueDiff
+    clc
+    adc     .valDiff
     beq     .foundTargetCol
-    jmp     .skipNewCol
-
-.coarseCheck
-; check if any cell nearby is close (delta hue OR (todo) delta val <= 2)
-;.tmpDiff    = tmpVars
-MAX_HUE_DIFF    = $01   ; one step
-   IF SKIPPED_VAL = 1
-MAX_VAL_DIFF    = $01   ; one step
-   ELSE
-MAX_VAL_DIFF    = $02   ; one step
-   ENDIF
-
-; compare hues:
-.checkHue
-    lda     .hueDiff                    ; same hue?
-    beq     .checkRangeValue            ;  yes, check value +/-2
-    cmp     #MAX_HUE_DIFF+1             ; difference <= 1?
-    bcc     .checkSameValue             ;  yes, check for same value
+    bit     SWCHB
+    bmi     .skipNewCol
+    cmp     #2                          ;  difference < 2?
     bcs     .skipNewCol                 ;  no, no match
-
-; compare value:
-.checkRangeValue    ; hues are the same
-    lda     .valDiff
-    cmp     #MAX_VAL_DIFF+1
-    bcs     .skipNewCol                 ;  no, no match
-    bcc     .foundTargetCol             ;  yes, match!
-
-.checkSameValue
-    lda     .valDiff
-    bne     .skipNewCol                 ;  no, no match
 .foundTargetCol
     lda     roundFlags
     and     #BLOCK_EMPTY|BURN_EMPTY
@@ -1523,11 +1454,15 @@ TMP_BASE    = .             ; .tmpObst has to be preserved until the end of obst
 ;---------------------------------------------------------------
 ; Scroll Rows and Columns
 ;---------------------------------------------------------------
+; 875 (before cleanup), 980, 1025, 1289, 1307, 1332, 1345, 1356, 1364
     and     #SCROLL_ROWS|SCROLL_COLS    ; must 1 and 2!
-    beq     .skipScrolls
-; scroll either rows or columns or both
-; determine direction:
-    tax
+    bne     .doScroll
+    jmp     .skipScrolls
+
+.doScroll
+; scroll either row or column:
+; determine type and direction:
+    tax                         ; 0..3; 1 = rows, 2 = cols
     jsr     NextRandom
     and     ScrollMask,x        ; 0..1, 2..3, 0..3; %01, %10, %11
     ora     DirOfs,x            ; 0, 2, 0
@@ -1535,7 +1470,20 @@ TMP_BASE    = .             ; .tmpObst has to be preserved until the end of obst
     lda     DirBits,y
     asl                         ; A = ????....
     tax
-    bcs     .scrollCol
+    bcc     .scrollRow
+; determine col:
+.randomCol
+    jsr     NextRandom          ; TODO: improve
+    and     #$0f
+    cmp     #NUM_COLS
+    bcs     .randomCol
+    cpx     #%11101110
+    bne     .doVScroll          ; offset == A
+;    clc
+    adc     #NUM_CELLS - NUM_COLS - 1; offset == NUM_CELLS - NUM_COLS + A
+    bne     .doVScroll
+
+.scrollRow
 ; determine row:
     ldy     #2                  ; 2 tries, 9/16 ok, 7/16*9/16 ok
 .randomRow
@@ -1547,42 +1495,83 @@ TMP_BASE    = .             ; .tmpObst has to be preserved until the end of obst
     bne     .randomRow
     lsr
 .validRow
-    tay
-
-;    ldy     #0
-;    ldx     #%01111110
-
-    lda     RowOfs,y
+    tay                         ; Y = row
+    lda     RowOfsTbl,y
     cpx     #%01111110
     bne     .scrollLeft
-    adc     #NUM_COLS-1
+    adc     #NUM_COLS-2
 .scrollLeft
-;    lda     RowOfsR,y
-;    cpx     #%01111110
-;    beq     .scrollRight
-;    lda     RowOfsL,y
-;.scrollRight
+.doVScroll
     tay
-    bpl     .doScroll
-    DEBUG_BRK
+;---------------------------------------------------------------
+; Scroll Cells
+;---------------------------------------------------------------
+; X = direction, Y = cell offset
+; load first cell:
+    lda     colorLst_R,y
+    pha
+; get direction:
+    txa
+    ldx     #NUM_COLS-2                 ;           used in right and left
+    asl
+    bcs     .skipRight
+;---------------------------------------------------------------
+; move cells right:
+.loopColsR
+    lda     colorLst_R-1,y              ; 4
+    sta     colorLst_W,y                ; 5
+    dey                                 ; 2
+    dex                                 ; 2
+    bpl     .loopColsR                  ; 3/2=16/15
+    bmi     .storeFirst                 ; 3
 
-.scrollCol
-.randomCol
-    jsr     NextRandom          ; TODO: improve
-    and     #$0f
-    cmp     #NUM_COLS
-    bcs     .randomCol
-    tay
-    lda     ColOfsU,y
-    cpx     #%11101110
-    beq     .scrollUp
-    lda     ColOfsD,y
-.scrollUp
-    tay
-.doScroll
-    clv
-    jsr     ScrollCells
+;---------------------------------------------------------------
+.skipRight
+    bmi     .skipLeft
+; move cells left:
+.loopColsL
+    lda     colorLst_R+1,y              ; 4
+    sta     colorLst_W,y                ; 5
+    iny                                 ; 2
+    dex                                 ; 2
+    bpl     .loopColsL                  ; 3/2=16/15
+    bmi     .storeFirst                 ; 3
+
+;---------------------------------------------------------------
+.skipLeft
+; check for down:
+    asl
+    asl
+    bcs     .skipDown
+; move cells down:
+;    clc
+.loopRowsD
+    lda     colorLst_R+NUM_COLS,y       ; 4
+    sta     colorLst_W,y                ; 5
+    tya                                 ; 2
+    adc     #NUM_COLS                   ; 2
+    tay                                 ; 2
+    cpy     #NUM_CELLS-NUM_COLS         ; 2
+    bcc     .loopRowsD                  ; 3/2=29/28
+    bcs     .storeFirst
+
+;---------------------------------------------------------------
+.skipDown
+; must be move cells up:
+;    sec
+.loopRowsU
+    lda     colorLst_R-NUM_COLS,y       ; 4
+    sta     colorLst_W,y                ; 5
+    tya                                 ; 2
+    sbc     #NUM_COLS                   ; 2
+    tay                                 ; 2
+    cpy     #NUM_COLS                   ; 2
+    bcs     .loopRowsU                  ; 3/2=29/28;    clc
+.storeFirst
+    pla
+    sta     colorLst_W,y
 .skipScrolls
+
 ;---------------------------------------------------------------
 ; Swap Cells
 ;---------------------------------------------------------------
@@ -1704,10 +1693,10 @@ TMP_BASE    = .             ; .tmpObst has to be preserved until the end of obst
     cmp     .row0
     beq     .randomRow1
     tay
-    lda     RowOfs,y
+    lda     RowOfsTbl,y
     tay
     txa
-    lda     RowOfs,x
+    lda     RowOfsTbl,x
     tax
     lda     #NUM_COLS-1
     sta     .count
@@ -1755,443 +1744,6 @@ TIM_OVE ; 1870
 ;*****************************  S U B R O U T I N E S  *****************************
 
 ;---------------------------------------------------------------
-ScrollCells SUBROUTINE
-;---------------------------------------------------------------
-    START_TMP TMP_BASE
-.yEnd       .byte
-    END_TMP
-
-    txa
-    bpl     .doRight
-    jmp     .skipRight
-
-;---------------------------------------------------------------
-.doRight
-    asl
-    asl
-    bpl     .downR
-    asl
-    bpl     .upR
-; shift colors right:
-    bvc     .singleScrollR
-  IF BLOCK_CELLS
-    lda     roundFlags                  ;           BLOCK_FLAG?
-    bpl     .skipBlockR
-    lda     colorLst_R+NUM_CELLS/2-1    ;           EMPTY_COL?
-    beq     .noMove
-.skipBlockR
-  ENDIF
-    ldy     #NUM_CELLS
-    lda     #0
-    beq     .wholeScrollR
-
-.singleScrollR
-    tya
-    sec
-    sbc     #NUM_COLS
-.wholeScrollR
-    sta     .yEnd
-.loopRowsR
-    lda     colorLst_R-1,y
-    pha
-    dey
-    ldx     #NUM_COLS-2
-.loopColsR
-    lda     colorLst_R-1,y              ; 4
-    sta     colorLst_W,y                ; 5
-    dey                                 ; 2
-    dex                                 ; 2
-    bpl     .loopColsR                  ; 3/2=16/15
-    pla
-    sta     colorLst_W,y
-    tya
-    cpy     .yEnd
-    bne     .loopRowsR
-TIM_R
-; 2005 cycles
-.exit
-  IF CHECK_MOVED ;{
-    sec
-    rts
-
-.noMove
-    clc
-  ELSE ;}
-.noMove
-  ENDIF ;}
-    rts
-
-;---------------------------------------------------------------
-.downR
-; move cells down right:
-  IF BLOCK_CELLS
-    lda     roundFlags                  ;           BLOCK_FLAG?
-    bpl     .skipBlockDR
-    lda     colorLst_R+NUM_CELLS/2+NUM_COLS-1   ;   EMPTY_COL?
-    beq     .noMove
-.skipBlockDR
-  ENDIF
-    jsr     SaveRightColumn
-    ldy     #NUM_COLS-2
-.loopColsDR
-    clc
-    ldx     colorLst_R,y
-.loopRowsDR
-    lda     colorLst_R+NUM_COLS*1,y     ; 4
-    sta     colorLst_W+NUM_COLS*0+1,y   ; 5
-    lda     colorLst_R+NUM_COLS*2,y     ; 4
-    sta     colorLst_W+NUM_COLS*1+1,y   ; 5
-    tya                                 ; 2
-    adc     #NUM_COLS*2                 ; 2
-    tay                                 ; 2
-    cpy     #NUM_CELLS-NUM_COLS         ; 2
-    bcc     .loopRowsDR                 ; 3/2=29/28
-    txa
-    sta     colorLst_W+1,y
-    tya
-    sbc     #NUM_CELLS-NUM_COLS+1
-    tay
-    bcs     .loopColsDR
-    ldy     #NUM_CELLS-NUM_COLS*2
-TIM_DR
-; 1913 cycles
-    jmp     .loadColumnDown             ;175
-
-;---------------------------------------------------------------
-.upR
-; move cells up right:
-  IF BLOCK_CELLS
-    lda     roundFlags
-    bpl     .skipBlockUR
-    lda     colorLst_R+NUM_CELLS/2-NUM_COLS-1   ;   EMPTY_COL?
-    beq     .noMove
-.skipBlockUR
-  ENDIF
-    jsr     SaveRightColumn
-    ldy     #NUM_CELLS-NUM_COLS-2
-.loopColsUR
-    ldx     colorLst_R+NUM_COLS,y
-    sec
-.loopRowsUR
-    lda     colorLst_R-NUM_COLS*0,y     ; 4
-    sta     colorLst_W+NUM_COLS*1+1,y   ; 5
-    lda     colorLst_R-NUM_COLS*1,y     ; 4
-    sta     colorLst_W-NUM_COLS*0+1,y   ; 5
-    tya                                 ; 2
-    sbc     #NUM_COLS*2                 ; 2
-    tay                                 ; 2
-    bcs     .loopRowsUR                 ; 3/2=27/26
-    txa
-    sta     colorLst_W-256+NUM_COLS+1,y
-    tya
-    adc     #NUM_CELLS-NUM_COLS-1
-    tay
-    cpy     #NUM_CELLS-NUM_COLS*2
-    bcs     .loopColsUR
-; load old right into left column:
-    ldy     #NUM_CELLS-NUM_COLS
-TIM_UR
-; 1845 cycles
-    jmp     .loadColumnUp
-
-;---------------------------------------------------------------
-.skipRight
-    asl
-    bpl     .doLefts
-    jmp     .skipLeft
-
-.doLefts
-    asl
-    bpl     .downL
-    asl
-    bmi     .doLeft
-    jmp     .upL
-
-.doLeft
-; move cells left:
-    bvc     .singleScrollL
-  IF BLOCK_CELLS
-    lda     roundFlags
-    bpl     .skipBlockL
-    lda     colorLst_R+NUM_CELLS/2+1    ;           EMPTY_COL?
-    beq     .noMove1
-.skipBlockL
-  ENDIF
-    ldy     #0
-    lda     #NUM_CELLS
-    bne     .wholeScrollL
-
-.singleScrollL
-    tya
-    clc
-    adc     #NUM_COLS
-.wholeScrollL
-    sta     .yEnd
-.loopRowsL
-    lda     colorLst_R,y
-    pha
-    iny
-    ldx     #NUM_COLS-2
-.loopColsL
-    lda     colorLst_R,y                ; 4
-    sta     colorLst_W-1,y              ; 5
-    iny                                 ; 2
-    dex                                 ; 2
-    bpl     .loopColsL                  ; 3/2=16/15
-    pla
-    sta     colorLst_W-1,y
-    cpy     .yEnd                       ; #NUM_CELLS
-    bcc     .loopRowsL
-TIM_L
-; 2117 cycles (.loopColsL crosses page)
-.exit1
-  IF CHECK_MOVED ;{
-    sec
-    rts
-
-.noMove1
-    clc
-  ELSE ;}
-.noMove1
-  ENDIF ;}
-    rts
-
-.downL
-; move cells down left:
-  IF BLOCK_CELLS
-    lda     roundFlags                  ;           BLOCK_FLAG?
-    bpl     .skipBlockDL
-    lda     colorLst_R+NUM_CELLS/2+NUM_COLS+1   ;   EMPTY_COL?
-    beq     .noMove1
-.skipBlockDL
-  ENDIF
-    jsr     SaveLeftColumn
-    ldy     #0
-    clc
-.loopColsDL
-    ldx     colorLst_R+1,y
-.loopRowsDL
-    lda     colorLst_R+NUM_COLS*1+1,y   ; 4
-    sta     colorLst_W+NUM_COLS*0,y     ; 5
-    lda     colorLst_R+NUM_COLS*2+1,y   ; 4
-    sta     colorLst_W+NUM_COLS*1,y     ; 5
-    tya                                 ; 2
-    adc     #NUM_COLS*2                 ; 2
-    tay                                 ; 2
-    cpy     #NUM_CELLS-NUM_COLS         ; 2
-    bcc     .loopRowsDL                 ; 3/2=29/28 -> 14,5
-    sbc     #NUM_CELLS-NUM_COLS-1
-    tay
-    txa
-    sta     colorLst_W+NUM_CELLS-NUM_COLS-1,y
-    cpy     #NUM_COLS-1
-    bcc     .loopColsDL
-    ldy     #NUM_CELLS-NUM_COLS-1
-TIM_DL
-; 1893 cycles
-    nop
-.loadColumnDown
-TIM_SLD
-    lda     colorBuf_R              ; saved bottom cell
-    sta     colorLst_W+NUM_COLS,y   ; ...to top cell
-    ldx     #NUM_ROWS-1
-    sec
-.loopLoadDown
-    lda     colorBuf_R,x
-    sta     colorLst_W,y
-    tya
-    sbc     #NUM_COLS
-    tay
-    dex
-    bne     .loopLoadDown
-TIM_LD
-; 172 cycles
-    rts
-
-;---------------------------------------------------------------
-.upL
-; move cells up left:
-  IF BLOCK_CELLS
-    lda     roundFlags                  ;           BLOCK_FLAG?
-    bpl     .skipBlockUL
-    lda     colorLst_R+NUM_CELLS/2-NUM_COLS+1   ;   EMPTY_COL?
-    beq     .noMove1
-.skipBlockUL
-  ENDIF
-    jsr     SaveLeftColumn
-    ldy     #NUM_CELLS-NUM_COLS*2+1
-.loopColsUL
-    ldx     colorLst_R+NUM_COLS,y
-    sec
-.loopRowsUL
-    lda     colorLst_R-NUM_COLS*0,y     ; 4
-    sta     colorLst_W+NUM_COLS*1-1,y   ; 5
-    lda     colorLst_R-NUM_COLS*1,y     ; 4
-    sta     colorLst_W-NUM_COLS*0-1,y   ; 5
-    tya                                 ; 2
-    sbc     #NUM_COLS*2                 ; 2
-    tay                                 ; 2
-    bcs     .loopRowsUL                 ; 3/2=27/26
-    txa
-    sta     colorLst_W-256+NUM_COLS-1,y
-    tya
-    adc     #NUM_CELLS-NUM_COLS+1
-    tay
-    cpy     #NUM_CELLS-NUM_COLS
-    bcc     .loopColsUL
-; load old left into right column:
-    ldy     #NUM_CELLS-1
-TIM_UL
-; 1847 cycles
-    nop
-TIM_SLU
-.loadColumnUp
-    ldx     #NUM_ROWS-2             ; 2         = 7
-    sec                             ; 2 =  4
-.loopLoadUp
-    lda     colorBuf_R,x            ; 4
-    sta     colorLst_W,y            ; 5
-    tya                             ; 2
-    sbc     #NUM_COLS               ; 2
-    tay                             ; 2
-    dex                             ; 2
-    bpl     .loopLoadUp             ; 3 = 20/19
-    lda     colorBuf_R+NUM_ROWS-1   ; 4         saved top cell
-    sta     colorLst_W,y            ; 5         ...to bottom cell
-TIM_LU
-; 172 cycles (1x unrolling saves 42 cycles)
-    rts
-
-;---------------------------------------------------------------
-.skipLeft
-; check for down:
-    asl
-    bmi     .skipDown
-; move cells down:
-    bvc     .singleScrollD
-  IF BLOCK_CELLS
-    lda     roundFlags                  ;           BLOCK_FLAG?
-    bpl     .skipBlockD
-    lda     colorLst_R+NUM_CELLS/2+NUM_COLS     ;   EMPTY_COL?
-    beq     .noMove2
-.skipBlockD
-  ENDIF
-    ldy     #NUM_COLS-1
-    lda     #-1
-    bne     .wholeScrollD
-
-.singleScrollD
-    tya
-    sec
-    sbc     #1
-.wholeScrollD
-    sta     .yEnd
-.loopColsD
-    clc
-    ldx     colorLst_R,y
-.loopRowsD
-    lda     colorLst_R+NUM_COLS*1,y     ; 4
-    sta     colorLst_W+NUM_COLS*0,y     ; 5
-    lda     colorLst_R+NUM_COLS*2,y     ; 4
-    sta     colorLst_W+NUM_COLS*1,y     ; 5
-    tya                                 ; 2
-    adc     #NUM_COLS*2                 ; 2
-    tay                                 ; 2
-    cpy     #NUM_CELLS-NUM_COLS         ; 2
-    bcc     .loopRowsD                  ; 3/2=29/28
-    txa
-    sta     colorLst_W,y
-    tya
-    sbc     #NUM_CELLS-NUM_COLS+1
-    tay
-;    txa
-;    sta     colorLst_W+NUM_CELLS-NUM_COLS+1,y      ; wraps and causes RW-Trap!
-    cpy     .yEnd
-    bne     .loopColsD
-TIM_D
-; 1845 cycles
-.exit2
-  IF CHECK_MOVED ;{
-    sec
-    rts
-
-.noMove2
-    clc
-  ELSE ;}
-.noMove2
-  ENDIF ;}
-    rts
-; (2534, 2222, 1897) 1819 cycles = ~23.9 scanlines
-
-;---------------------------------------------------------------
-.skipDown
-    asl
-    bmi     .skipUp
-; move cells up:
-    bvc     .singleScrollU
-  IF BLOCK_CELLS
-    lda     roundFlags                  ;           BLOCK_FLAG?
-    bpl     .skipBlockLU
-    lda     colorLst_R+NUM_CELLS/2-NUM_COLS     ;   EMPTY_COL?
-    beq     .exit2
-.skipBlockLU
-  ENDIF
-    ldy     #NUM_CELLS-1
-    lda     #NUM_CELLS-NUM_COLS-1
-    bne     .wholeScrollU
-
-.singleScrollU
-    tya
-    sec
-    sbc     #1
-.wholeScrollU
-    sta     .yEnd
-    sec
-.loopColsU
-    ldx     colorLst_R,y
-.loopRowsU
-    lda     colorLst_R-NUM_COLS*1,y     ; 4
-    sta     colorLst_W-NUM_COLS*0,y     ; 5
-    lda     colorLst_R-NUM_COLS*2,y     ; 4
-    sta     colorLst_W-NUM_COLS*1,y     ; 5
-    tya                                 ; 2
-    sbc     #NUM_COLS*2                 ; 2
-    tay                                 ; 2
-    cpy     #NUM_COLS*2-1               ; 2
-;    bpl     .loopRowsU                  ; 3/2=29/28
-    bcs     .loopRowsU                  ; 3/2=29/28
-;    clc
-    adc     #NUM_CELLS-NUM_COLS-1
-    tay
-    txa
-    sta     colorLst_W-NUM_CELLS+NUM_COLS+1,y
-    cpy     .yEnd                        ; #NUM_CELLS-NUM_COLS
-    bne     .loopColsU
-TIM_U
-; 1826 cycles
-.skipUp
-    rts
-
-;---------------------------------------------------------------
-SaveRightColumn SUBROUTINE
-;---------------------------------------------------------------
-    ldy     #NUM_CELLS-1
-    NOP_W
-SaveLeftColumn
-    ldy     #NUM_CELLS-NUM_COLS
-    ldx     #NUM_ROWS-1
-    sec
-.loopSave
-    lda     colorLst_R,y
-    sta     colorBuf_W,x
-    tya
-    sbc     #NUM_COLS
-    tay
-    dex
-    bpl     .loopSave
-    rts
-
-;---------------------------------------------------------------
 GetRandomColorIdx SUBROUTINE
 ;---------------------------------------------------------------
 ; uses:    A, X
@@ -2205,6 +1757,7 @@ GetRandomColorIdx SUBROUTINE
     bcc     .cellOk
     lsr                     ; TODO: improve
 .cellOk
+; don't swap with nearby cells:
     cmp     IndexTbl,x
     beq     .loopRandom
     dex
@@ -2297,7 +1850,7 @@ InitColors
     ldy     #NUM_ROWS-1
 .loopRows
     sty     .row
-    lda     MultTbl,y
+    lda     RowOfsTbl,y
     sta     .colorPtrW
     ldx     LumTbl,y
     ldy     #NUM_COLS-1
@@ -2316,7 +1869,7 @@ InitColors
 ;;    ldx     #0
 ;.loopRows
 ;    sty     .row
-;    ldx     MultTbl,y
+;    ldx     RowOfsTbl,y
 ;    lda     LumTbl,y
 ;    sta     .lum
 ;    clc
@@ -2558,9 +2111,9 @@ ID_BLANK = . - DigitPtrTbl
 ProgressGfx
     ds  FONT_H, %1000100
 
-MultTbl
+RowOfsTbl
 _IDX    SET 0
-    REPEAT NUM_ROWS+1
+    REPEAT NUM_ROWS
     .byte  _IDX * NUM_COLS
 _IDX    SET _IDX + 1
     REPEND
@@ -2762,26 +2315,9 @@ DirBits
     .byte   %11101111           ; column down
     .byte   %01011111           ; row left
     .byte   %00111111           ; row right
-RowOfs
-_VAL SET 0
-  REPEAT NUM_ROWS
-    .byte   _VAL
-_VAL SET _VAL + NUM_COLS
-  REPEND
-ColOfsD
-_VAL SET 0
-  REPEAT NUM_COLS
-    .byte   _VAL
-_VAL SET _VAL + 1
-  REPEND
-ColOfsU
-_VAL SET NUM_CELLS-NUM_COLS
-  REPEAT NUM_COLS
-    .byte   _VAL
-_VAL SET _VAL + 1
-  REPEND
 
 IndexTbl
+; TODO: adapt to players moving
     .byte   NUM_CELLS/2-NUM_COLS-1
     .byte   NUM_CELLS/2-NUM_COLS
     .byte   NUM_CELLS/2-NUM_COLS+1
