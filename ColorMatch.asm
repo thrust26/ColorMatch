@@ -30,11 +30,15 @@
 ;   + 9 x 7 large cells for two sprites
 ;     + single player (with shading)
 ;     + two players without shading
+; - 2-player mode
+;   - display score alternating (last scoring player, different colors)
+;   - display energy alternating (last scoring player/time based, e.g. every 1s)
+;   - same or different targets?
+;   -
 
 ; TODOs:
 ; - better randomization
-; - better game over display (also remove target bars)
-; - change controls (move players instead of cells)
+; o better game over display (also remove target bars)
 ; - let chameleon adapt to current cell (drains time)
 ; - display adapted chameleon
 ; ? while adapting chameleon cannot move
@@ -46,8 +50,8 @@
 ;   + random row order
 ;   + random column order
 ;   + random cells
-; + timer, bonus score when found fast
-; + timer bar below main kernel
+; + energy, bonus score when found fast
+; + energy bar below main kernel
 ; + score position below
 ; + hue delta tbl
 ; + round progress bar
@@ -67,6 +71,7 @@
 ; + improve progess bar (6 digits + bar)
 ; + improve remaining cells display (colored ball)
 ; + overlap bottom most target cursor with bar preparation
+; + change controls (move players instead of cells)
 
 START_GAME      = 0
 START_ROUND     = 0 ; NUM_ROUNDS-1
@@ -114,17 +119,17 @@ RM_LEAD_0       = 1
 ;===============================================================================
 
   IF NTSC_COL
-BLACK2          = BLACK
+BLACK2              = BLACK
   ELSE
-BLACK2          = BLACK+2   ; black is darker in PAL
+BLACK2              = BLACK+2   ; black is darker in PAL
   ENDIF
 
-TIMER_COL       = GREEN+$8  ;BLUE_CYAN+$c
-TIMER_CX_COL    = RED+$e    ;BLUE_CYAN+$6
-NO_TIMER_COL    = BLACK2+$4
-NO_TIMER_CX_COL = RED+$8    ;BLACK2+$2
+ENERGY_COL          = GREEN+$8  ;BLUE_CYAN+$c
+ENERGY_CX_COL       = RED+$e    ;BLUE_CYAN+$6
+NO_ENERGY_COL       = BLACK2+$4
+NO_ENERGY_CX_COL    = RED+$8    ;BLACK2+$2
 
-EMPTY_COL       = BLACK;+$1
+EMPTY_COL           = BLACK;+$1
 
 
 ;===============================================================================
@@ -135,21 +140,30 @@ EOR_RND_LO      = $bd           ; %10110100 ($9c, $b4, $bd, $ca, $eb, $fc)
 
 NUM_ROWS        = 7
 NUM_COLS        = 9
-NUM_CELLS       = NUM_ROWS * NUM_COLS ; = 117
+NUM_CELLS       = NUM_ROWS * NUM_COLS ; = 63
+ROW_MASK        = $07
+COL_MASK        = $0f
+CELL_MASK       = $3f
+
 CELL_H          = 21
 BAR_HEIGHT      = 4
+
+NUM_PLAYERS     = 1
 
 MOVE_SPEED      = $20
 OBST_SPEED      = (256 * 8) / (2 * 60)      ; every 2 seconds
 
-MAX_TIMER       = 160-8                                         ; 152
-CELL_BONUS      = (MAX_TIMER * 20 + 50) / 100                   ; 20%
-ROUND_BONUS     = (MAX_TIMER * 50 + 50) / 100                   ; 50%
-TIMER_SPEED     = (256 * MAX_TIMER + (60 * 25) / 2) / (60 * 25) ; 25 seconds
+MAX_ENERGY      = 160-8                                             ; 152
+CELL_BONUS      = (MAX_ENERGY * 20 + 50) / 100                      ; 20%
+ROUND_BONUS     = (MAX_ENERGY * 50 + 50) / 100                      ; 50%
+;ENERGY_SPEED     = (256 * MAX_ENERGY + (60 * 25) / 2) / (60 * 25)  ; 25 seconds
+ENERGY_SPEED    = (256 * MAX_ENERGY + (60 * 60) / 2) / (60 * 60)    ; 60 seconds
+BURN_RATE       = (256 * MAX_ENERGY + (60 * 5) / 2) / (60 * 5)      ; 5 seconds
+MOVE_TIME       = CELL_BONUS*256/(NUM_COLS+NUM_ROWS)                ; allow 7+9 steps (-time based losses) per target
 
 NUM_DIGITS      = 3
 DIGIT_BYTES     = NUM_DIGITS * 2
-NUM_TMPS        = DIGIT_BYTES * 2 + 2   ; 12
+NUM_TMPS        = DIGIT_BYTES * 2 + 2  ; 14 TODO: reduce
 
 ; gameState flags:
 GAME_RUNNING    = 1 << 7
@@ -176,7 +190,7 @@ BLOCK_EMPTY     = 1 << 7
 ; chamState0|1 flags:
 ;CHAM_HIDDEN     = 1 << 7
 
-STACK_SIZE      = 4+2 ; 2 only used in InitGame/NextRound
+STACK_SIZE      = 4 ; 2 only used in InitGame/NextRound
 
 
 ;===============================================================================
@@ -186,10 +200,7 @@ STACK_SIZE      = 4+2 ; 2 only used in InitGame/NextRound
     SEG.U   variables
     ORG     $80
 
-frameCnt        .byte
-;---------------------------------------
-tmpVars         ds NUM_TMPS
-;---------------------------------------
+; preserved between games:
 randomLo        .byte
 randomHi        .byte
 
@@ -198,38 +209,55 @@ gameState       .byte           ; 1.......
 variation       .byte           ; 0..3
 round           .byte
 roundFlags      .byte
-cellCnt         .byte           ; number of remaing cells per round
-
-chamColor0      .byte
-chamColor1      .byte
-chamState0      .byte
-chamState1      .byte
-targetColor0    .byte
-targetColor1    .byte
-xPlayer0        .byte
-xPlayer1        .byte
-yPlayer0        .byte
-yPlayer1        .byte
-
-moveSum         .byte           ; joystick directional input delay counter
-obstSum         .byte           ; obstacle delay counter
-
-soundIdx0       .byte
-soundIdx1       .byte           ; burning, tick
 ;---------------------------------------
-timerLst        ds 2
-timerLo         = timerLst
-timerHi         = timerLst+1
+;hiScoreLst      ds DIGIT_BYTES / 2
+;---------------------------------------
+; reset per game:
+frameCnt        .byte
+;---------------------------------------
+cellCntLst      ds  NUM_PLAYERS ; number of remaing cells per round
+cellCnt0        = cellCntLst
+;cellCnt1        = cellCntLst+1
+chamColorLst    ds  NUM_PLAYERS
+chamColor0      = chamColorLst
+;chamColor1      = chamColorLst+1
+chamStateLst    ds  NUM_PLAYERS
+chamState0      = chamStateLst
+;chamState1      = chamStateLst+1
+targetColorLst  ds NUM_PLAYERS
+targetColor0    = targetColorLst
+;targetColor1    = targetColorLst+1
+xPlayerLst      ds NUM_PLAYERS
+xPlayer0        = xPlayerLst
+;xPlayer1        = xPlayerLst+1
+yPlayerLst      ds NUM_PLAYERS
+yPlayer0        = yPlayerLst
+;yPlayer1        = yPlayerLst+1
+moveSumLst      ds NUM_PLAYERS  ; joystick directional input delay counter
+moveSum0        = moveSumLst
+;moveSum1        = moveSumLst+1
+;---------------------------------------
+energyLst       ds 2
+energyLo        = energyLst
+energyHi        = energyLst+1
+; TODO: 2nd player
 ;---------------------------------------
 scoreLst        ds DIGIT_BYTES / 2
 scoreLo         = scoreLst
 scoreMid        = scoreLst+1
 scoreHi         = scoreLst+2
+; TODO: 2nd player
+;---------------------------------------
+obstSum         .byte           ; obstacle delay counter
+
+soundIdx0       .byte           ; pings
+soundIdx1       .byte           ; burning, tick
 ;---------------------------------------
 RAMKernel       ds KernelCodeEnd - KernelCode ; (48 bytes reserved for RAM kernel)
 ;---------------------------------------
+tmpVars         ds NUM_TMPS     ; can overlap with stack
+;---------------------------------------
 RAM_END         = .
-
 
 ;===============================================================================
 ; S C - R A M - V A R I A B L E S
@@ -393,7 +421,7 @@ DrawKernel SUBROUTINE
 .digitPtr5      = .digitPtrLst+6
 .digitPtr3      = .digitPtrLst+8
 .digitPtr1      = .digitPtrLst+10
-.ballPtr        = $fb               ; TODO
+.ballPtr        = $fc               ; TODO
     END_TMP
 
 ; *** Setup Digit Pointers ***
@@ -402,10 +430,10 @@ TIM_DIGITS_START
 
     ldx     #DIGIT_BYTES/2-1
 ; setup progress bar:
-    lda     cellCnt
+    lda     cellCnt0
     lsr
     lsr
-    adc     cellCnt
+    adc     cellCnt0
     adc     #7
     lsr
     lsr
@@ -503,9 +531,10 @@ TIM_DIGITS_END
 .waitTim
     ldy     INTIM
     bne     .waitTim
+    sty     VBLANK              ; 3
     sta     WSYNC
 ;---------------------------------------
-    sty     VBLANK              ; 3
+    sta     HMOVE
     beq     .enterLoop          ; 3         @06
     DEBUG_BRK
 
@@ -531,7 +560,11 @@ ExitKernel                      ;           @75
     lda     .tmpGfx1            ; 3
 .enterLoop                      ;           @07
     sta     GRP1                ; 3 =  9
+  IF NUM_PLAYERS = 2
     lda     targetColor1        ; 3
+  ELSE
+    lda     #0
+  ENDIF
     sta     COLUP1              ; 3
     lda     targetColor0        ; 3
     sta     COLUP0              ; 3 = 12    @25!    (goal < @26)
@@ -547,10 +580,12 @@ ExitKernel                      ;           @75
     txs                         ; 2 = ???
 ; setup chameleon pointers:
     lda     #<NoChameleon       ; 2
+  IF NUM_PLAYERS = 2
     cpy     yPlayer1            ; 3
     bne     .emptyP1            ; 2/3
     lda     #<Chameleon         ; 2
 .emptyP1
+  ENDIF
     sta     .gfxPtr1
 ;    sta     ChamGfx1 + 1 - PD   ; 3 = 11/12
     lda     #<NoChameleon       ; 2
@@ -618,8 +653,13 @@ LoopPatch
 ;    NOP_W                       ; 1
 ;.notHidden0
                                 ;           @62
+  IF NUM_PLAYERS = 2
     ldy     chamColor1          ; 3
     stx     GRP0                ; 3                 VDELed! X = 0
+  ELSE
+    ldy     #0
+    stx.w   GRP0                ; 3                 VDELed! X = 0
+  ENDIF
     lda     Col0 + 1 - PD       ; 3
     stx     NUSIZ0              ; 3         @74     @>=73!
 ;---------------------------------------
@@ -646,35 +686,35 @@ LoopPatch
 .pf1b       ds 1
 .pf0b       ds 1
     END_TMP
-.timerCol   = $ff           ; TODO
-.noTimerCol = $ff-1
+.energyCol      = $ff           ; TODO
+.noEnergyCol    = $ff-1
 
 ; prepare energy bar (1/2):
     sta     WSYNC
 ;---------------------------------------
-; setup timer colors:
+; setup energy colors:
     ldy     yPlayer0
     lda     RowOfsTbl,y
     clc
     adc     xPlayer0
     tay
 ; check if player is in empty, burning cell:
-    lda     #NO_TIMER_COL       ; 2
+    lda     #NO_ENERGY_COL      ; 2
     ldx     colorLst_R,y
-    bne     .timerStdCol        ; 3/2
+    bne     .energyStdCol       ; 3/2
     lda     gameState
     and     #IN_FOUND_CELL
-    bne     .timerStdCol        ; 3/2
+    bne     .energyStdCol       ; 3/2
     lda     roundFlags
     and     #BURN_EMPTY
-    beq     .timerStdCol
-    lda     #NO_TIMER_CX_COL    ; 2
-    ldy     #TIMER_CX_COL       ; 2
+    beq     .energyStdCol
+    lda     #NO_ENERGY_CX_COL   ; 2
+    ldy     #ENERGY_CX_COL      ; 2
     NOP_W
-.timerStdCol
-    ldy     #TIMER_COL          ; 2
-    sta     .noTimerCol         ; 3
-    sty     .timerCol           ; 3
+.energyStdCol
+    ldy     #ENERGY_COL         ; 2
+    sta     .noEnergyCol        ; 3
+    sty     .energyCol          ; 3
     sta     WSYNC
 ;---------------------------------------
     ldx     #%000               ; 2
@@ -683,7 +723,7 @@ LoopPatch
     lda     #$70                ; 2         -7
     sta     HMCLR               ; 3
     sta     HMP1                ; 3
-    lda     timerHi             ; 3
+    lda     energyHi            ; 3
     lsr                         ; 2
     lsr                         ; 2
     tay                         ; 2
@@ -703,31 +743,31 @@ LoopPatch
     cpy     #35                 ; 2
     bcc     .below35            ; 2/3
     stx     .pf1b               ; 3
-    lda     TimerF-35,y         ; 4
+    lda     EnergyF-35,y        ; 4
     bcs     .setPF0b            ; 3 = 56
 
 .below11                        ;   @23
-    ldx     TimerF-3,y          ; 4
+    ldx     EnergyF-3,y         ; 4
     stx     .pf1a               ; 3
     bcc     .setPF2a            ; 3
 
 .below19
-    ldx     TimerR-11,y         ; 4
+    ldx     EnergyR-11,y        ; 4
     stx     .pf2a
     bcc     .setPF2b
 
 .below27
-    ldx     TimerF-19,y         ; 4
+    ldx     EnergyF-19,y        ; 4
     stx     .pf2b
     bcc     .setPF1b
 
 .below35
-    ldx     TimerR-27,y         ; 4
+    ldx     EnergyR-27,y        ; 4
     stx     .pf1b               ; 3
     bcc     .setPF0b            ; 3
 
 .below3
-    ldx     TimerR+5,y          ; 4
+    ldx     EnergyR+5,y         ; 4
     stx     .pf0a
     sta     .pf1a
 .setPF2a
@@ -745,7 +785,7 @@ LoopPatch
 ;---------------------------------------
     ldx     #0                  ; 2
     stx     GRP0                ; 3
-    lda     timerHi             ; 3
+    lda     energyHi            ; 3
     clc                         ; 2
     adc     #6                  ; 2
     sta     WSYNC               ; 3 = 32    @52
@@ -781,9 +821,9 @@ WaitBar
 .loopBar
     sta     WSYNC               ; 3 =  9
 ;---------------------------------------
-    lda     .noTimerCol         ; 3
+    lda     .noEnergyCol        ; 3
     sta.w   COLUPF              ; 4
-    lda     .timerCol           ; 3
+    lda     .energyCol          ; 3
     sta     COLUBK              ; 3 = 13
     lda     .pf0a               ; 3
     sta     PF0                 ; 3         @19
@@ -892,6 +932,7 @@ LoopScore                       ;           @66
 PrepareTargetBars ;SUBROUTINE
 ;---------------------------------------------------------------
 ; target bars are drawn above and below player's row
+  IF NUM_PLAYERS = 2
     tya                         ; 2         6..0
     sec                         ; 2         7, 6 = 1; 6, 6 = 1;
     sbc     yPlayer1            ; 3         6..0
@@ -901,6 +942,9 @@ PrepareTargetBars ;SUBROUTINE
 ; show target bar for P1:
     dex                         ; 2         %11111111
 .skipP1
+  ELSE
+    ldx     #0
+  ENDIF
     stx     .tmpGfx1
 
     tya                         ; 2
@@ -1015,7 +1059,6 @@ VerticalBlank SUBROUTINE
     bmi     .contStopped
     lda     gameState
     lsr
-DEBUG2
     ror                                 ; SELECT_MODE? (2)
     bcs     .startGame                  ;  yes, start game
     bpl     .startNextRound             ; GAME_OVER? (1) no, start next round
@@ -1037,13 +1080,15 @@ DEBUG2
 .startNextRound
     lda     #GAME_RUNNING
     sta     gameState
-    jsr     GetRandomColorIdx   ; extra stack usage only here!
+    jsr     GetTargetColorIdx   ; extra stack usage only here!
     sta     targetColor0
-    jsr     GetRandomColorIdx   ; extra stack usage only here!
-    sta     targetColor1
+;    jsr     GetTargetColorIdx   ; extra stack usage only here!
+;    sta     targetColor1
 .contStopped
     jmp     .skipRunning
 
+;    ldx     #NUM_PLAYERS-1
+;.loopPlayers
 ;---------------------------------------------------------------
 ; Handle Joystick Directions
 ;---------------------------------------------------------------
@@ -1058,12 +1103,12 @@ TIM_S
     lax     SWCHA
 ; control repeat rate
     cmp     #$ff
-    lda     moveSum
+    lda     moveSum0
     bcc     .dirPressed
     lda     #MOVE_SPEED-1       ; reset move delay
 .dirPressed
     sbc     #MOVE_SPEED-1
-    sta     moveSum
+    sta     moveSum0
     bcs     .skipDirs
 ; move player:
     txa
@@ -1117,6 +1162,9 @@ TIM_S
     sta     xPlayer0
     lda     .tmpYPlayer
     sta     yPlayer0
+    ldy     #>MOVE_TIME
+    lda     #<MOVE_TIME
+    jsr     DecreaseEnergy
 .skipMove
 ;    lda     #0
 ;    sta     chamState0
@@ -1136,30 +1184,30 @@ TIM_S
 
 ; position players and ball:
     lda     xPlayer0
-    asl
-    asl
-    asl
-    asl
-    adc     #14-5           ; HMOVEd initally
     ldx     #0
-    jsr     SetXPos
+    jsr     SetXPosTarget
+  IF NUM_PLAYERS = 2
     lda     xPlayer1
-    asl
-    asl
-    asl
-    asl
-    adc     #14-5
     inx
-    jsr     SetXPos
+    jsr     SetXPosTarget
+  ENDIF
     sta     WSYNC
 ;---------------------------------------
-    sta     HMOVE
-    lda     #%10
+    sta     RESBL
+    lda     #$62
+    sta     HMBL
     sta     ENABL
     lda     #%110000
     sta     CTRLPF
-    SLEEP   57
-    sta     RESBL
+;    sta     WSYNC
+;;---------------------------------------
+;    lda     #%10
+;    sta     ENABL
+;    lda     #%110000
+;    sta     CTRLPF
+;    SLEEP   57
+;    sta     RESBL
+
 ; /VerticalBlank
 
     jmp     DrawKernel
@@ -1182,15 +1230,16 @@ TIM_OVS
 
 .contRunning
 ;---------------------------------------------------------------
-; Decrease Timer
+; Decrease Energy
 ;---------------------------------------------------------------
     START_TMP
-.tmpColorIdx    ds 1
-.tmpColor       ds 1
-.tmpVal         ds 1
+.tmpColorIdx    ds 1        ; for clearing cell
+.tmpColor       ds 1        ; for difference calculation and empty cell
+.tmpDiff        ds 1
 .hueDiff        ds 1
 .valDiff        ds 1
-.tmpDiff        ds 1
+TMP_BASE_PLR    = .
+;.tmpVal         = .tmpDiff
     END_TMP
 
 ; get cell-index and -color:
@@ -1213,7 +1262,7 @@ TIM_OVS
     lsr
     lsr
     lsr
-    tax
+    tax                                 ; TODO: replace for 2-player code
     lda     HueIdx,x
     sec
     sbc     HueIdx,y
@@ -1228,16 +1277,19 @@ TIM_OVS
 .hueOk
     sta     .hueDiff
 ; calculate value-diff:
-    lda     .tmpColor
-    and     #$0f
-    sta     .tmpVal
    IF SKIPPED_VAL = 1
 ; use value-diff table if values are skipped
     lda     targetColor0
     and     #$0f
+    lsr
     tay
     lda     ValIdxTbl,y
-    ldy     .tmpVal
+    pha
+    lda     .tmpColor
+    and     #$0f
+    lsr
+    tay
+    pla
     sec
     sbc     ValIdxTbl,y
     bcs     .posValDiff
@@ -1245,6 +1297,10 @@ TIM_OVS
     adc     #1
 .posValDiff
    ELSE ;{
+    lda     .tmpColor
+    and     #$0f
+    lsr
+    sta     .tmpVal
     lda     targetColor0                ; chamColor0
     and     #$0f
     sec
@@ -1258,7 +1314,7 @@ TIM_OVS
     bcs     .wait4ever
    ENDIF ;}
     sta     .valDiff
-; calculate timer-speed:
+; calculate energy-speed:
     lda     .tmpColor                   ; EMPTY_COL?
     bne     .calcDiff                   ;  no, normal calculation
     bit     roundFlags                  ; BURN_EMPTY?
@@ -1275,45 +1331,28 @@ TIM_OVS
     sta     AUDC1
     inc     soundIdx1
 .skipBurnSound
-    lda     #TIMER_SPEED * 8            ; 26 * 8 = 208
-    bne     .contDecTimer
+    lda     #BURN_RATE
+    bne     .contDecEnergy
 
 ; calculate hue difference:
 .calcDiff0
-    lda     #8
-    bne     .contDecTimer
+    lda     #ENERGY_SPEED
+    bne     .contDecEnergy
 
 .calcDiff
     lda     .valDiff
     clc
     adc     .hueDiff                    ; 1..4 + 1..6 = 2..10 (was: 1..6 + 1..7 = 2..13)
-    sta     .tmpDiff
+; multiply diff by 6:
+;    sta     .tmpDiff
     asl                                 ; 4..20 (was: 4..26)
-    adc     .tmpDiff                    ; 6..30
+;    adc     .tmpDiff                    ; 6..30
+;    adc     .hueDiff
     asl                                 ; 12..60 (was: 8..52)
-;    adc     #6
-.contDecTimer
-    clc
-    adc     timerLo
-    sta     timerLo
-    bcc     .skipTimerHi
-    lda     timerHi
-    beq     .skipTimerHi
-    dec     timerHi
-    bne     .skipTimerHi
-    lda     #GAME_OVER|SELECT_MODE
-    sta     gameState
-    lda     #0
-    sta     targetColor0
-    sta     chamColor0
-; play end of game sound:
-    lda     #BONUS_SOUND_LEN
-    sta     soundIdx0
-    lda     #$7
-    sta     AUDC0
-    lda     #$14
-    sta     AUDF0
-.skipTimerHi
+    adc     #ENERGY_SPEED
+.contDecEnergy
+    ldy     #0
+    jsr     DecreaseEnergy
 ;---------------------------------------------------------------
 ; Check for match
 ;---------------------------------------------------------------
@@ -1323,9 +1362,9 @@ TIM_OVS
     adc     .valDiff
     beq     .foundTargetCol
     bit     SWCHB
-    bmi     .skipNewCol
+    bmi     .skipMatch
     cmp     #2                          ;  difference < 2?
-    bcs     .skipNewCol                 ;  no, no match
+    bcs     .skipMatch                 ;  no, no match
 .foundTargetCol
     lda     roundFlags
     and     #BLOCK_EMPTY|BURN_EMPTY
@@ -1336,12 +1375,13 @@ TIM_OVS
     lda     #GAME_RUNNING|IN_FOUND_CELL
     sta     gameState
 .skipEmpty
+; update colors for next target
 ;    lda     targetColor0
 ;    sta     chamColor0
 ;    lda     #CHAM_HIDDEN
 ;    sta     chamState0
 ; TODO: compare with current target color
-    jsr     GetRandomColorIdx
+    jsr     GetTargetColorIdx
     sta     targetColor0
 ; increase score:
     lda     #$00
@@ -1350,37 +1390,39 @@ TIM_OVS
 ; start found sound and add extra time:
     lda     #$04
     sta     AUDC0
-    ldx     #FOUND_SOUND_LEN
+    ldx     #FOUND_SOUND_LEN            ; TODO: replace for 2-player code
     ldy     #$0e
     lda     #CELL_BONUS
-    dec     cellCnt
+    dec     cellCnt0
     bne     .skipNextRound
-    lda     #ROUND_DONE             ; remove GAME_RUNNING
+    lda     #ROUND_DONE                 ; remove GAME_RUNNING
     sta     gameState
-    ldx     #BONUS_SOUND_LEN
+    ldx     #BONUS_SOUND_LEN            ; TODO: replace for 2-player code
     ldy     #$0a
-    lda     #ROUND_BONUS+CELL_BONUS ; = 106
+    lda     #ROUND_BONUS+CELL_BONUS     ; = 106
 .skipNextRound
     stx     soundIdx0
     sty     AUDF0
 ;---------------------------------------------------------------
-; Increase Timer
+; Increase Energy
 ;---------------------------------------------------------------
     clc
-DEBUG0
-    adc     timerHi                 ; 152 + 152/2 + 152/5 = 258!
+    adc     energyHi                ; 152 + 152/2 + 152/5 = 258!
     bcs     .hexOverFlow
-    cmp     #MAX_TIMER
-    bcc     .setTimerHi
+    cmp     #MAX_ENERGY
+    bcc     .setEnergyHi
 .hexOverFlow
-    sbc     #MAX_TIMER              ; 258 - 152 = 106!
+    sbc     #MAX_ENERGY             ; 258 - 152 = 106!
     jsr     Hex2BCD
     jsr     AddScore
-    lda     #MAX_TIMER
-.setTimerHi
-    sta     timerHi
+    lda     #MAX_ENERGY
+.setEnergyHi
+    sta     energyHi
+.skipMatch
+;    dex
+;    bmi     .exitLoop
+;    jmp     .loopPlayers
 
-.skipNewCol
 ;---------------------------------------------------------------
 ; Apply Obstacles
 ;---------------------------------------------------------------
@@ -1390,20 +1432,11 @@ DEBUG0
 .skipApplyObstJmp
     jmp     .skipApplyObst
 
-ObstTbl
-    .byte   SWAP_ROWS, SWAP_COLS, SWAP_FOUND, SCROLL_COLS, SCROLL_ROWS
-NUM_OBST = . - ObstTbl
-ObstRndDiff
-    .byte   0, ($101/2)-1, ($102/3)-1, ($103/4)-1
-    .byte   ($104/5)-1
-    ;ff 7f 55 3f 33
-NUM_OBST = . - ObstRndDiff
-
 .doApplyObst
     START_TMP
-.tmpObst    ds  1
-TMP_BASE    = .             ; .tmpObst has to be preserved until the end of obstacle handling!
-.obstLst    ds  NUM_OBST
+.tmpObst        ds  1
+TMP_BASE_OBST   = .             ; .tmpObst has to be preserved until the end of obstacle handling!
+.obstLst        ds  NUM_OBST
     END_TMP
     lda     obstSum
     clc
@@ -1474,7 +1507,7 @@ TMP_BASE    = .             ; .tmpObst has to be preserved until the end of obst
 ; determine col:
 .randomCol
     jsr     NextRandom          ; TODO: improve
-    and     #$0f
+    and     #COL_MASK
     cmp     #NUM_COLS
     bcs     .randomCol
     cpx     #%11101110
@@ -1488,7 +1521,7 @@ TMP_BASE    = .             ; .tmpObst has to be preserved until the end of obst
     ldy     #2                  ; 2 tries, 9/16 ok, 7/16*9/16 ok
 .randomRow
     jsr     NextRandom          ; TODO: improve
-    and     #$0f
+    and     #ROW_MASK
     cmp     #NUM_ROWS
     bcc     .validRow
     dey
@@ -1575,7 +1608,7 @@ TMP_BASE    = .             ; .tmpObst has to be preserved until the end of obst
 ;---------------------------------------------------------------
 ; Swap Cells
 ;---------------------------------------------------------------
-    START_TMP TMP_BASE
+    START_TMP TMP_BASE_OBST
 .xCell0     ds 1
     END_TMP
 ;    lda     roundFlags
@@ -1583,18 +1616,18 @@ TMP_BASE    = .             ; .tmpObst has to be preserved until the end of obst
     and     #SWAP_FOUND
     beq     .skipSwapCells
     jsr     GetRandomColorIdx
-    stx     .xCell0
+    sty     .xCell0
 .repeatCell1
     jsr     GetRandomColorIdx
-    cpx     .xCell0
+    cpy     .xCell0
     beq     .repeatCell1
-    ldy     .xCell0
-    lda     colorLst_R,x
-    pha
+    ldx     .xCell0
     lda     colorLst_R,y
-    sta     colorLst_W,x
-    pla
+    pha
+    lda     colorLst_R,x
     sta     colorLst_W,y
+    pla
+    sta     colorLst_W,x
 .skipSwapCells
 
 ;---------------------------------------------------------------
@@ -1605,14 +1638,14 @@ TMP_BASE    = .             ; .tmpObst has to be preserved until the end of obst
     and     #SWAP_COLS
     beq     .skipSwapCols
 ; swap cols:
-    START_TMP TMP_BASE
+    START_TMP TMP_BASE_OBST
 .col0       ds 1
     END_TMP
 ; determine col 0:
     ldy     #2                  ; 2 tries, 9/16 ok, 7/16*9/16 ok
 .randomCol0
     jsr     NextRandom          ; TODO: improve
-    and     #$0f
+    and     #COL_MASK
     cmp     #NUM_COLS
     bcc     .validCol0
     dey
@@ -1625,7 +1658,7 @@ TMP_BASE    = .             ; .tmpObst has to be preserved until the end of obst
     ldy     #1                  ; 2 tries, 9/16 ok, 7/16*9/16 ok
 .randomCol1
     jsr     NextRandom          ; TODO: improve
-    and     #$0f
+    and     #COL_MASK
     cmp     #NUM_COLS
     bcc     .validCol1
     dey
@@ -1662,7 +1695,7 @@ TMP_BASE    = .             ; .tmpObst has to be preserved until the end of obst
     and     #SWAP_ROWS
     beq     .skipSwapRows
 ; swap rows
-    START_TMP TMP_BASE
+    START_TMP TMP_BASE_OBST
 .row0       ds 1
 .count      ds 1
     END_TMP
@@ -1670,7 +1703,7 @@ TMP_BASE    = .             ; .tmpObst has to be preserved until the end of obst
     ldy     #2                  ; 2 tries, 9/16 ok, 7/16*9/16 ok
 .randomRow0
     jsr     NextRandom          ; TODO: improve
-    and     #$0f
+    and     #ROW_MASK
     cmp     #NUM_ROWS
     bcc     .validRow0
     dey
@@ -1683,7 +1716,7 @@ TMP_BASE    = .             ; .tmpObst has to be preserved until the end of obst
     ldy     #1                  ; 2 tries, 9/16 ok, 7/16*9/16 ok
 .randomRow1
     jsr     NextRandom          ; TODO: improve
-    and     #$0f
+    and     #ROW_MASK
     cmp     #NUM_ROWS
     bcc     .validRow1
     dey
@@ -1746,43 +1779,89 @@ TIM_OVE ; 1870
 ;---------------------------------------------------------------
 GetRandomColorIdx SUBROUTINE
 ;---------------------------------------------------------------
-; uses:    A, X
-; returns: A = color, X = index
+; uses:    A, Y
+; returns: A = color, Y = index
 .repeatRandom
-    ldx     #INDEX_LEN-1
-.loopRandom
     jsr     NextRandom
-    and     #$7f
+    and     #CELL_MASK
     cmp     #NUM_CELLS
     bcc     .cellOk
     lsr                     ; TODO: improve
 .cellOk
-; don't swap with nearby cells:
-    cmp     IndexTbl,x
-    beq     .loopRandom
-    dex
-    bne     .cellOk
-    tax
-    lda     colorLst_R,x    ; EMPTY_COL?
+    tay
+    lda     colorLst_R,y    ; EMPTY_COL?
     beq     .repeatRandom
+    rts
+
+;---------------------------------------------------------------
+GetTargetColorIdx SUBROUTINE
+;---------------------------------------------------------------
+; uses:    A, Y
+; returns: A = color, Y = index
+.repeatRandom
+    jsr     NextRandom
+    and     #CELL_MASK
+; don't swap with nearby cells:
+    cmp     #NUM_CELLS-NUM_COLS*2-2*2+1
+    bcc     .cellOk
+    lsr                     ; TODO: improve
+.cellOk
+    adc     #NUM_COLS+2
+    adc     xPlayer0
+    ldy     yPlayer0
+    adc     RowOfsTbl,y
+    cmp     #NUM_CELLS
+    bcc     .cellOk2
+    sbc     #NUM_CELLS
+.cellOk2
+    tay
+    lda     colorLst_R,y    ; EMPTY_COL?
+    beq     .repeatRandom
+    rts
+
+;---------------------------------------------------------------
+DecreaseEnergy SUBROUTINE
+;---------------------------------------------------------------
+    START_TMP TMP_BASE_PLR
+.subLo      ds 1
+.subHi      ds 1
+    END_TMP
+    sta     .subLo
+    sty     .subHi
+    clc
+    lda     energyLo
+    sbc     .subLo
+    sta     energyLo
+    lda     energyHi
+    sbc     .subHi
+    beq     .gameOver
+    bcs     .contGame
+.gameOver
+    ldy     #GAME_OVER|SELECT_MODE
+    sty     gameState
+; play end of game sound:
+    ldy     #BONUS_SOUND_LEN
+    sty     soundIdx0
+    ldy     #$7
+    sty     AUDC0
+    ldy     #$14
+    sty     AUDF0
+    lda     #0
+    sta     targetColor0
+    sta     chamColor0
+.contGame
+    sta     energyHi
     rts
 
 ;---------------------------------------------------------------
 GameInit SUBROUTINE
 ;---------------------------------------------------------------
-    lda     #8
-    sta     xPlayer0
-    lda     #0
-    sta     yPlayer0
-    lda     #0
-    sta     xPlayer1
-    lda     #0
-    sta     yPlayer1
     lda     #$0e
     sta     chamColor0
+  IF NUM_PLAYERS = 2
     lda     #$ac
     sta     chamColor1
-
+  ENDIF
     ldx     #KernelCodeEnd-KernelCode-1
 .loopCopy
     lda     KernelCode,x
@@ -1798,6 +1877,17 @@ GameInit SUBROUTINE
 Select
     sty     variation
 Reset
+    lda     #4
+    sta     xPlayer0
+    lda     #3
+    sta     yPlayer0
+  IF NUM_PLAYERS = 2
+    lda     #0
+    sta     xPlayer1
+    lda     #NUM_ROWS
+    sta     yPlayer1
+  ENDIF
+
     ldx     VarStartRound,y
     stx     round
     inx
@@ -1816,9 +1906,9 @@ StartGame
     ldy     #0
     sty     scoreMid
     sty     scoreHi
-    sty     timerLo
-    ldy     #MAX_TIMER
-    sty     timerHi
+    sty     energyLo
+    ldy     #MAX_ENERGY
+    sty     energyHi
     ldy     variation
     ldx     VarStartRound,y
     bpl     .contInit2
@@ -1891,13 +1981,15 @@ InitColors
 
     lda     #0
     sta     targetColor0
+  IF NUM_PLAYERS = 2
     sta     targetColor1
+  ENDIF
 
     ldy     round
     lda     RoundFlags,y
     sta     roundFlags
     lda     RoundLen,y
-    sta     cellCnt
+    sta     cellCnt0
     rts
 ; /GameInit (does not return 0)
 
@@ -1954,11 +2046,17 @@ NextRandom SUBROUTINE
     rts
 ; NextRandom
 
-    ALIGN_FREE_LBL  256, "SetXPos"
+    ALIGN_FREE_LBL  256, "SetXPosTarget"
 
 ;---------------------------------------------------------------
-SetXPos SUBROUTINE
+SetXPosTarget SUBROUTINE
 ;---------------------------------------------------------------
+    asl
+    asl
+    asl
+    asl
+    adc     #14-5           ; HMOVEd initally
+;SetXPos
     sec
     sta     WSYNC
 WaitObject:
@@ -2202,14 +2300,14 @@ SKIPPED_VAL = 1
     .byte   $0e
    IF SKIPPED_VAL = 1
 ValIdxTbl
-    ds  2, $00
-    ds  2, $01
-    ds  2, $02
-    ds  2, $03
-    ds  2, $04
-    ds  2, $05
-    ds  2, $ff          ; skipped
-    ds  2, $06
+    .byte   $00
+    .byte   $01
+    .byte   $02
+    .byte   $03
+    .byte   $04
+    .byte   $05
+    .byte   $ff     ; skipped
+    .byte   $06
    ENDIF
   ELSE ;/NTSC
 SKIPPED_VAL = 1
@@ -2223,18 +2321,18 @@ SKIPPED_VAL = 1
     .byte   $0e
    IF SKIPPED_VAL = 1
 ValIdxTbl
-    ds  2, $00
-    ds  2, $01
-    ds  2, $02
-    ds  2, $03
-    ds  2, $04
-    ds  2, $05
-    ds  2, $ff          ; skipped
-    ds  2, $06
+    .byte   $00
+    .byte   $01
+    .byte   $02
+    .byte   $03
+    .byte   $04
+    .byte   $05
+    .byte   $ff     ; skipped
+    .byte   $06
    ENDIF
   ENDIF
 
-TimerR
+EnergyR
     .byte   %11111110
     .byte   %11111100
     .byte   %11111000
@@ -2243,7 +2341,7 @@ TimerR
     .byte   %11000000
     .byte   %10000000
     .byte   %00000000
-TimerF
+EnergyF
     .byte   %01111111
     .byte   %00111111
     .byte   %00011111
@@ -2306,6 +2404,15 @@ NoChameleon
     ds  CELL_H, 0
     CHECKPAGE ChameleonGfx
 
+ObstTbl
+    .byte   SWAP_ROWS, SWAP_COLS, SWAP_FOUND, SCROLL_COLS, SCROLL_ROWS
+NUM_OBST = . - ObstTbl
+ObstRndDiff
+    .byte   0, ($101/2)-1, ($102/3)-1, ($103/4)-1
+    .byte   ($104/5)-1
+    ;ff 7f 55 3f 33
+NUM_OBST = . - ObstRndDiff
+
 ScrollMask = . - 1
     .byte   %01, %01, %11
 DirOfs = . - 1
@@ -2316,18 +2423,18 @@ DirBits
     .byte   %01011111           ; row left
     .byte   %00111111           ; row right
 
-IndexTbl
-; TODO: adapt to players moving
-    .byte   NUM_CELLS/2-NUM_COLS-1
-    .byte   NUM_CELLS/2-NUM_COLS
-    .byte   NUM_CELLS/2-NUM_COLS+1
-    .byte   NUM_CELLS/2-1
-    .byte   NUM_CELLS/2
-    .byte   NUM_CELLS/2+1
-    .byte   NUM_CELLS/2+NUM_COLS-1
-    .byte   NUM_CELLS/2+NUM_COLS
-    .byte   NUM_CELLS/2+NUM_COLS+1
-INDEX_LEN = . - IndexTbl
+;IndexTbl
+;; TODO: adapt to players moving
+;    .byte   NUM_CELLS/2-NUM_COLS-1
+;    .byte   NUM_CELLS/2-NUM_COLS
+;    .byte   NUM_CELLS/2-NUM_COLS+1
+;    .byte   NUM_CELLS/2-1
+;    .byte   NUM_CELLS/2
+;    .byte   NUM_CELLS/2+1
+;    .byte   NUM_CELLS/2+NUM_COLS-1
+;    .byte   NUM_CELLS/2+NUM_COLS
+;    .byte   NUM_CELLS/2+NUM_COLS+1
+;INDEX_LEN = . - IndexTbl
 
 VolumeTbl
     .byte   0
@@ -2361,17 +2468,15 @@ RoundFlags
     .byte                                                  SWAP_COLS|SWAP_ROWS  ; 3     some order
     .byte                          SCROLL_COLS|SCROLL_ROWS                      ; 4     very messy
     .byte                                      SCROLL_ROWS|SWAP_COLS            ; 5     very messy
-
     .byte   BLOCK_EMPTY|SWAP_FOUND                                              ; 6     some mess
     .byte   BLOCK_EMPTY|SWAP_FOUND|SCROLL_COLS                                  ; 7     more mess
     .byte   BLOCK_EMPTY|SWAP_FOUND|            SCROLL_ROWS                      ; 8     more mess
     .byte   BLOCK_EMPTY|SWAP_FOUND|                        SWAP_COLS            ; 9     more mess
     .byte   BLOCK_EMPTY|SWAP_FOUND|                                  SWAP_ROWS  ;10     more mess
-
     .byte   BURN_EMPTY |SWAP_FOUND                                              ;11
-    .byte   BURN_EMPTY |SWAP_FOUND|SCROLL_COLS
-    .byte   BURN_EMPTY |SWAP_FOUND|            SCROLL_ROWS
-    .byte   BURN_EMPTY |SWAP_FOUND|                        SWAP_COLS
+    .byte   BURN_EMPTY |SWAP_FOUND|SCROLL_COLS                                  ;12
+    .byte   BURN_EMPTY |SWAP_FOUND|            SCROLL_ROWS                      ;13
+    .byte   BURN_EMPTY |SWAP_FOUND|                        SWAP_COLS            ;14
     .byte   BURN_EMPTY |SWAP_FOUND|                                  SWAP_ROWS  ;15
 ; TODO: random from here (1 x KEEP|BLOCK|BURN, 2..5 x others)
 NUM_ROUNDS = . - RoundFlags
