@@ -34,6 +34,8 @@
 ;   - display score alternating (last scoring player, different colors)
 ;   - display energy alternating (last scoring player/time based, e.g. every 1s)
 ;   - same or different targets?
+;   - round ends when 1st player is done
+;   - round bonus for both (same?)
 ;   -
 
 ; TODOs:
@@ -158,29 +160,29 @@ CELL_BONUS      = (MAX_ENERGY * 20 + 50) / 100                      ; 20%
 ROUND_BONUS     = (MAX_ENERGY * 50 + 50) / 100                      ; 50%
 ;ENERGY_SPEED     = (256 * MAX_ENERGY + (60 * 25) / 2) / (60 * 25)  ; 25 seconds
 ENERGY_SPEED    = (256 * MAX_ENERGY + (60 * 60) / 2) / (60 * 60)    ; 60 seconds
-BURN_RATE       = (256 * MAX_ENERGY + (60 * 5) / 2) / (60 * 5)      ; 5 seconds
-MOVE_TIME       = CELL_BONUS*256/(NUM_COLS+NUM_ROWS)                ; allow 7+9 steps (-time based losses) per target
+BURN_ENERGY     = (256 * MAX_ENERGY + (60 * 5) / 2) / (60 * 5)      ; 5 seconds
+MOVE_ENERGY     = CELL_BONUS*256/(NUM_COLS+NUM_ROWS)                ; allow 7+9 steps (-time based losses) per target
 
 NUM_DIGITS      = 3
 DIGIT_BYTES     = NUM_DIGITS * 2
-NUM_TMPS        = DIGIT_BYTES * 2 + 2  ; 14 TODO: reduce
+NUM_TMPS        = DIGIT_BYTES * 2  ; 14 TODO: reduce
 
 ; gameState flags:
 GAME_RUNNING    = 1 << 7
 ROUND_DONE      = 1 << 6
-SWCHB_PRESSED   = 1 << 5
+SWCHB_PRESSED   = 1 << 5    ; 2x for 2 players
 ;...
-IN_FOUND_CELL   = 1 << 2
+IN_FOUND_CELL   = 1 << 2    ; 2x for 2 players
 SELECT_MODE     = 1 << 1
 GAME_OVER       = 1 << 0
 
 ; roundFlags constants:
 ; any of these 5, values and their order must NOT be changed! (see apply obstacles)
-SCROLL_ROWS     = 1 << 0    ; affects 13 cells
-SCROLL_COLS     = 1 << 1    ; affects  9 cells
+SCROLL_ROWS     = 1 << 0    ; affects  9 cells
+SCROLL_COLS     = 1 << 1    ; affects  7 cells
 SWAP_FOUND      = 1 << 2    ; affects  2 cells (easiest)
-SWAP_COLS       = 1 << 3    ; affects 18 cells
-SWAP_ROWS       = 1 << 4    ; affects 26 cells
+SWAP_COLS       = 1 << 3    ; affects 14 cells
+SWAP_ROWS       = 1 << 4    ; affects 18 cells
 ; SWAP and SCROLL mixed creates a mess!
 ; unused        = 1 << 5
 ; only one of these:
@@ -344,7 +346,7 @@ _END_TMP SET .
   ENDM
 
   MAC KERNEL_CODE
-    START_TMP tmpVars + DIGIT_BYTES + 4
+    START_TMP tmpVars + DIGIT_BYTES + 2
 .gfxPtr0    ds 2
 .gfxPtr1    ds 2
     END_TMP
@@ -415,13 +417,6 @@ DrawKernel SUBROUTINE
 ;---------------------------------------------------------------
     START_TMP
 .digitPtrLst    ds  12
-.digitPtr4      = .digitPtrLst
-.digitPtr2      = .digitPtrLst+2
-.digitPtr0      = .digitPtrLst+4
-.digitPtr5      = .digitPtrLst+6
-.digitPtr3      = .digitPtrLst+8
-.digitPtr1      = .digitPtrLst+10
-.ballPtr        = $fc               ; TODO
     END_TMP
 
 ; *** Setup Digit Pointers ***
@@ -429,19 +424,6 @@ DrawKernel SUBROUTINE
 TIM_DIGITS_START
 
     ldx     #DIGIT_BYTES/2-1
-; setup progress bar:
-    lda     cellCnt0
-    lsr
-    lsr
-    adc     cellCnt0
-    adc     #7
-    lsr
-    lsr
-    lsr
-    eor     #$ff
-    clc
-    adc     #<Blank
-    sta     .ballPtr
   IF RM_LEAD_0
     bit     .digitPtrLst+11 ; must be a high pointer (with bit 6 set)
 ;    bit     $ffff
@@ -494,10 +476,10 @@ TIM_DIGITS_END
 
     START_TMP tmpVars + DIGIT_BYTES
 .rowCount       ds 1
-.colorPtr       ds 2
 .tmpGfx1        ds 1
 .gfxPtr0        ds 2
 .gfxPtr1        ds 2
+.colorPtr       =  $fc          ; use some stack
     END_TMP
 
     lda     #<colorLst_R + NUM_COLS * (NUM_ROWS - 1)
@@ -679,15 +661,16 @@ LoopPatch
 
 ; *** Draw energy bar ***
     START_TMP tmpVars + DIGIT_BYTES
-.pf0a       ds 1
-.pf1a       ds 1
-.pf2a       ds 1
-.pf2b       ds 1
-.pf1b       ds 1
-.pf0b       ds 1
+.pf0a           ds 1
+.pf1a           ds 1
+.pf2a           ds 1
+.pf2b           ds 1
+.pf1b           ds 1
+.pf0b           ds 1
     END_TMP
-.energyCol      = $ff           ; TODO
+.energyCol      = $ff           ; use some stack
 .noEnergyCol    = $ff-1
+.ballPtr        = $ff-2
 
 ; prepare energy bar (1/2):
     sta     WSYNC
@@ -781,8 +764,23 @@ LoopPatch
 
     sta     WSYNC
 ;---------------------------------------
+; TODO: move some setup code here
     sta     WSYNC
 ;---------------------------------------
+; setup progress bar:
+    lda     cellCnt0            ; 3
+    lsr                         ; 2
+    lsr                         ; 2
+    adc     cellCnt0            ; 3
+    adc     #7                  ; 2
+    lsr                         ; 2
+    lsr                         ; 2
+    lsr                         ; 2
+    eor     #$ff                ; 2
+    clc                         ; 2
+    adc     #<Blank             ; 2
+    sta     .ballPtr            ; 3 = 27
+
     ldx     #0                  ; 2
     stx     GRP0                ; 3
     lda     energyHi            ; 3
@@ -844,6 +842,14 @@ WaitBar
 
 ;---------------------------------------------------------------
 ; *** Draw score ***
+    START_TMP
+.digitPtr4      = .digitPtrLst
+.digitPtr2      = .digitPtrLst+2
+.digitPtr0      = .digitPtrLst+4
+.digitPtr5      = .digitPtrLst+6
+.digitPtr3      = .digitPtrLst+8
+.digitPtr1      = .digitPtrLst+10
+    END_TMP
                                 ;           @50
     lda     #>DigitGfx          ; 2
     sta     .ballPtr+1          ; 3
@@ -963,7 +969,7 @@ PrepareTargetBars ;SUBROUTINE
 KernelCode ; copied into RAM and patched there
     KERNEL_CODE
 
-    ALIGN_FREE_LBL   256, "PatchTbl"
+;    ALIGN_FREE_LBL   256, "PatchTbl"
 
 PatchTbl
     .byte   Col0 + 1 - PD
@@ -1062,9 +1068,9 @@ VerticalBlank SUBROUTINE
     ror                                 ; SELECT_MODE? (2)
     bcs     .startGame                  ;  yes, start game
     bpl     .startNextRound             ; GAME_OVER? (1) no, start next round
-    jsr     Reset                       ;  no, reset
-    bne     .contStopped
-    DEBUG_BRK
+;    jsr     Reset                       ;  no, reset
+;    bne     .contStopped
+;    DEBUG_BRK
 
 .startGame
     jsr     StartGame
@@ -1082,8 +1088,10 @@ VerticalBlank SUBROUTINE
     sta     gameState
     jsr     GetTargetColorIdx   ; extra stack usage only here!
     sta     targetColor0
-;    jsr     GetTargetColorIdx   ; extra stack usage only here!
-;    sta     targetColor1
+  IF NUM_PLAYERS = 2
+    jsr     GetTargetColorIdx   ; extra stack usage only here!
+    sta     targetColor1
+  ENDIF
 .contStopped
     jmp     .skipRunning
 
@@ -1155,17 +1163,16 @@ TIM_S
     adc     .tmpXPlayer
     tay
     lda     colorLst_R,y
-    beq     .skipMove
+    beq     .skipDirs
 .skipBlockR
   ENDIF
     lda     .tmpXPlayer
     sta     xPlayer0
     lda     .tmpYPlayer
     sta     yPlayer0
-    ldy     #>MOVE_TIME
-    lda     #<MOVE_TIME
+    ldy     #>MOVE_ENERGY
+    lda     #<MOVE_ENERGY
     jsr     DecreaseEnergy
-.skipMove
 ;    lda     #0
 ;    sta     chamState0
     lda     #GAME_RUNNING       ; remove IN_FOUND_CELL flag
@@ -1315,13 +1322,17 @@ TMP_BASE_PLR    = .
    ENDIF ;}
     sta     .valDiff
 ; calculate energy-speed:
-    lda     .tmpColor                   ; EMPTY_COL?
-    bne     .calcDiff                   ;  no, normal calculation
-    bit     roundFlags                  ; BURN_EMPTY?
-    bvc     .calcDiff0                  ;  no, used fixed energy rate
     lda     gameState                   ; in found cell?
     and     #IN_FOUND_CELL              ;
-    bne     .calcDiff0                  ;  yes, used fixed energy rate
+    bne     .useDiff0                   ;  yes, used fixed energy rate
+    lda     .tmpColor                   ; EMPTY_COL?
+    bne     .calcDiff                   ;  no, normal calculation
+;    bit     roundFlags                  ; BURN_EMPTY?
+;    bvc     .useDiff0                  ;  no, used fixed energy rate
+  IF DEBUG
+.w4e
+    bvc     .w4e
+  ENDIF
     lda     soundIdx1
     bne     .skipBurnSound
     sta     AUDF1
@@ -1331,11 +1342,11 @@ TMP_BASE_PLR    = .
     sta     AUDC1
     inc     soundIdx1
 .skipBurnSound
-    lda     #BURN_RATE
+    lda     #BURN_ENERGY
     bne     .contDecEnergy
 
 ; calculate hue difference:
-.calcDiff0
+.useDiff0
     lda     #ENERGY_SPEED
     bne     .contDecEnergy
 
@@ -1487,8 +1498,8 @@ TMP_BASE_OBST   = .             ; .tmpObst has to be preserved until the end of 
 ;---------------------------------------------------------------
 ; Scroll Rows and Columns
 ;---------------------------------------------------------------
-; 875 (before cleanup), 980, 1025, 1289, 1307, 1332, 1345, 1356, 1364
-    and     #SCROLL_ROWS|SCROLL_COLS    ; must 1 and 2!
+; 875 (before cleanup), 980, 1025, 1289, 1307, 1332, 1345, 1356, 1364, 1448, 1453
+    and     #SCROLL_ROWS|SCROLL_COLS    ; must be 1 and 2!
     bne     .doScroll
     jmp     .skipScrolls
 
@@ -1497,20 +1508,29 @@ TMP_BASE_OBST   = .             ; .tmpObst has to be preserved until the end of 
 ; determine type and direction:
     tax                         ; 0..3; 1 = rows, 2 = cols
     jsr     NextRandom
-    and     ScrollMask,x        ; 0..1, 2..3, 0..3; %01, %10, %11
-    ora     DirOfs,x            ; 0, 2, 0
-    tay
-    lda     DirBits,y
-    asl                         ; A = ????....
+    and     ScrollMask,x        ; %010, %010, %111
+    ora     DirBits,x           ; %000, %101, %000
+    lsr
     tax
+; row: 0 = right, 1 = left
+; col: 2 = down,  3 = up
     bcc     .scrollRow
+;    and     ScrollMask,x        ; 0..1, 2..3, 0..3; %01, %10, %11
+;    ora     DirOfs,x            ; 0, 2, 0
+;    tay
+;    lda     DirBits,y
+;    asl                         ; A = ????....
+;    tax
+;    bcc     .scrollRow
+
 ; determine col:
 .randomCol
     jsr     NextRandom          ; TODO: improve
     and     #COL_MASK
     cmp     #NUM_COLS
     bcs     .randomCol
-    cpx     #%11101110
+;    cpx     #%11101110          ; up?
+    cpx     #3                  ; up?
     bne     .doVScroll          ; offset == A
 ;    clc
     adc     #NUM_CELLS - NUM_COLS - 1; offset == NUM_CELLS - NUM_COLS + A
@@ -1530,7 +1550,8 @@ TMP_BASE_OBST   = .             ; .tmpObst has to be preserved until the end of 
 .validRow
     tay                         ; Y = row
     lda     RowOfsTbl,y
-    cpx     #%01111110
+;    cpx     #%01111110          ; right?
+    cpx     #0                  ; right?
     bne     .scrollLeft
     adc     #NUM_COLS-2
 .scrollLeft
@@ -1544,12 +1565,14 @@ TMP_BASE_OBST   = .             ; .tmpObst has to be preserved until the end of 
     lda     colorLst_R,y
     pha
 ; get direction:
-    txa
-    ldx     #NUM_COLS-2                 ;           used in right and left
-    asl
-    bcs     .skipRight
+;    txa
+;    asl
+;    bcs     .skipRight
+    dex
+    bpl     .skipRight
 ;---------------------------------------------------------------
 ; move cells right:
+    ldx     #NUM_COLS-2                 ;           used in right and left
 .loopColsR
     lda     colorLst_R-1,y              ; 4
     sta     colorLst_W,y                ; 5
@@ -1560,8 +1583,11 @@ TMP_BASE_OBST   = .             ; .tmpObst has to be preserved until the end of 
 
 ;---------------------------------------------------------------
 .skipRight
-    bmi     .skipLeft
+;    bmi     .skipLeft
+    dex
+    bpl     .skipLeft
 ; move cells left:
+    ldx     #NUM_COLS-2                 ;           used in right and left
 .loopColsL
     lda     colorLst_R+1,y              ; 4
     sta     colorLst_W,y                ; 5
@@ -1573,11 +1599,13 @@ TMP_BASE_OBST   = .             ; .tmpObst has to be preserved until the end of 
 ;---------------------------------------------------------------
 .skipLeft
 ; check for down:
-    asl
-    asl
-    bcs     .skipDown
+;    asl
+;    asl
+;    bcs     .skipDown
+    dex
+    bpl     .skipDown
 ; move cells down:
-;    clc
+    clc
 .loopRowsD
     lda     colorLst_R+NUM_COLS,y       ; 4
     sta     colorLst_W,y                ; 5
@@ -1591,7 +1619,7 @@ TMP_BASE_OBST   = .             ; .tmpObst has to be preserved until the end of 
 ;---------------------------------------------------------------
 .skipDown
 ; must be move cells up:
-;    sec
+    sec
 .loopRowsU
     lda     colorLst_R-NUM_COLS,y       ; 4
     sta     colorLst_W,y                ; 5
@@ -1877,17 +1905,6 @@ GameInit SUBROUTINE
 Select
     sty     variation
 Reset
-    lda     #4
-    sta     xPlayer0
-    lda     #3
-    sta     yPlayer0
-  IF NUM_PLAYERS = 2
-    lda     #0
-    sta     xPlayer1
-    lda     #NUM_ROWS
-    sta     yPlayer1
-  ENDIF
-
     ldx     VarStartRound,y
     stx     round
     inx
@@ -1909,6 +1926,7 @@ StartGame
     sty     energyLo
     ldy     #MAX_ENERGY
     sty     energyHi
+
     ldy     variation
     ldx     VarStartRound,y
     bpl     .contInit2
@@ -1928,6 +1946,17 @@ NextRound
     sta     frameCnt
     sta     obstSum
 
+    ldx     #NUM_COLS/2
+  IF NUM_PLAYERS = 1
+    ldy     #NUM_ROWS/2
+  ELSE
+    ldy     #NUM_ROWS/2-1
+    stx     xPlayer1
+    sty     yPlayer1
+    ldy     #NUM_ROWS/2+1
+  ENDIF
+    stx     xPlayer0
+    sty     yPlayer0
 InitColors
     START_TMP
 .colorPtrW  ds 2
@@ -2413,15 +2442,23 @@ ObstRndDiff
     ;ff 7f 55 3f 33
 NUM_OBST = . - ObstRndDiff
 
+;  IF 0
+;ScrollMask = . - 1
+;    .byte   %01, %01, %11
+;DirOfs = . - 1
+;    .byte   %10, 0, 0
+;DirBits
+;    .byte   %11110111           ; column up
+;    .byte   %11101111           ; column down
+;    .byte   %01011111           ; row left
+;    .byte   %00111111           ; row right
+;  ENDIF
+
 ScrollMask = . - 1
-    .byte   %01, %01, %11
-DirOfs = . - 1
-    .byte   %10, 0, 0
-DirBits
-    .byte   %11110111           ; column up
-    .byte   %11101111           ; column down
-    .byte   %01011111           ; row left
-    .byte   %00111111           ; row right
+    .byte   %010, %010, %111    ; rows, cols, both
+DirBits = . - 1
+    .byte   %000, %101, %000    ; rows, cols, both
+
 
 ;IndexTbl
 ;; TODO: adapt to players moving
@@ -2500,11 +2537,11 @@ NUM_VARS = . - VarStartRound
     .byte     " - (C) 2024 Thomas Jentzsch "
 
   IF F8SC
-    ORG_FREE_LBL $fff0, "BS"
+    ORG_FREE_LBL $fff6, "Bankswitch"
 Start0
-    bit     $fff8
+;    bit     $fff8
     jmp     Start
-    ds 4, 0
+    ds 4-3, 0
     .byte   "SC"
     .word   Start0
     .word   Start0
@@ -2518,11 +2555,11 @@ Start0
   IF F8SC
     RORG $F000
 
-    ds 4080, $ff
+    ds 4086, $ff
 Start1
-    bit     $fff8
+;    bit     $fff8
     jmp     Start
-    ds 4, 0
+    ds 4-3, 0
     .byte   "SC"
     .word   Start1
     .word   VERSION
