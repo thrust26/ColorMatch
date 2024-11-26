@@ -479,7 +479,7 @@ TIM_DIGITS_END
 .tmpGfx1        ds 1
 .gfxPtr0        ds 2
 .gfxPtr1        ds 2
-.colorPtr       =  $fc          ; use some stack
+.colorPtr       =  $ff-1        ; use some stack
     END_TMP
 
     lda     #<colorLst_R + NUM_COLS * (NUM_ROWS - 1)
@@ -502,11 +502,15 @@ TIM_DIGITS_END
     ldy     #NUM_ROWS           ;           = 6
     sty     .rowCount
 
+    bit     .digitPtrLst+11 ; must be a high pointer (with bit 6 set)
+;    bit     $ffff
+
     lda     #%110101            ; 2                 double width players, 8 pixel ball (4 would do too)
     sta     NUSIZ0              ; 3
     sta     NUSIZ1              ; 3 = 10    @18
 
-    jsr     PrepareTargetBars
+    bne     .prepareTargetBars
+.contPrepare
     stx     GRP0                ;           VDELed!
 
     lda     .tmpGfx1           ; 4 = 10
@@ -550,15 +554,45 @@ ExitKernel                      ;           @75
     sta     COLUP1              ; 3
     lda     targetColor0        ; 3
     sta     COLUP0              ; 3 = 12    @25!    (goal < @26)
-; restore stack pointer:
-    ldx     #$ff                ; 2
-    txs                         ; 2
 ; loop:
     dec     .rowCount           ; 3
     bmi     .exitLoop;Jmp       ; 2/3
     ldy     .rowCount           ;  =  3
 ; calculate for new row:
-    jsr     PrepareTargetBars   ;
+    clv
+;---------------------------------------------------------------
+.prepareTargetBars
+;---------------------------------------------------------------
+; target bars are drawn above and below player's row
+; player 1:
+  IF NUM_PLAYERS = 2
+    ldx     #$ff
+    cpy     yPlayer1
+    beq     .drawP1
+    dey
+    cpy     yPlayer1
+    beq     .inyDrawP1
+    inx
+.inyDrawP1
+    iny
+.drawP1
+  ELSE
+    ldx     #0
+  ENDIF
+    stx     .tmpGfx1
+; player 0:
+    ldx     #$ff
+    cpy     yPlayer0
+    beq     .drawP0
+    dey
+    cpy     yPlayer0
+    beq     .inyDrawP0
+    inx
+.inyDrawP0
+    iny
+.drawP0
+    bvs     .contPrepare
+;---------------------------------------------------------------
     txs                         ; 2 = ???
 ; setup chameleon pointers:
     lda     #<NoChameleon       ; 2
@@ -933,38 +967,6 @@ LoopScore                       ;           @66
     txs
     jmp     ContKernel
 ; /DrawKernel
-
-;---------------------------------------------------------------
-PrepareTargetBars ;SUBROUTINE
-;---------------------------------------------------------------
-; target bars are drawn above and below player's row
-  IF NUM_PLAYERS = 2
-    tya                         ; 2         6..0
-    sec                         ; 2         7, 6 = 1; 6, 6 = 1;
-    sbc     yPlayer1            ; 3         6..0
-    cmp     #$02                ; 2
-    ldx     #0                  ; 2
-    bcs     .skipP1             ; 2/3
-; show target bar for P1:
-    dex                         ; 2         %11111111
-.skipP1
-  ELSE
-    ldx     #0
-  ENDIF
-    stx     .tmpGfx1
-
-    tya                         ; 2
-    sec                         ; 2
-    sbc     yPlayer0            ; 3
-    cmp     #$02                ; 2
-    ldx     #0                  ; 2
-    bcs     .skipP0             ; 2/3
-; show target bar for P0:
-    dex                         ; 2         %11111111
-.skipP0
-    rts
-; /PrepareTargetBars
-
 
 KernelCode ; copied into RAM and patched there
     KERNEL_CODE
