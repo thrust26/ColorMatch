@@ -36,7 +36,9 @@
 ;   - same or different targets?
 ;   - round ends when 1st player is done
 ;   - round bonus for both (same?)
-;   -
+;   o adjust values individually per color
+;     + remove skipped vals in table
+;     - adjust value difference calculation (e.g. $82 is value 0) (valSubTbl)
 
 ; TODOs:
 ; - better randomization
@@ -96,7 +98,7 @@ F8SC            = 1 ; create F8SC instead of 4KSC (for Harmony)
 ILLEGAL         = 1
 DEBUG           = 1
 
-BLOCK_CELLS     = 1
+TWO_PLAYERS     = 0
 
 SAVEKEY         = 0 ; (-~220) support high scores on SaveKey
 PLUSROM         = 0 ; (-~50)
@@ -131,7 +133,8 @@ ENERGY_CX_COL       = RED+$e    ;BLUE_CYAN+$6
 NO_ENERGY_COL       = BLACK2+$4
 NO_ENERGY_CX_COL    = RED+$8    ;BLACK2+$2
 
-EMPTY_COL           = BLACK;+$1
+EMPTY_COL           = BLACK2+2
+BURN_COL            = BLACK
 
 
 ;===============================================================================
@@ -150,7 +153,11 @@ CELL_MASK       = $3f
 CELL_H          = 21
 BAR_HEIGHT      = 4
 
+  IF TWO_PLAYERS = 0
 NUM_PLAYERS     = 1
+  ELSE
+NUM_PLAYERS     = 2
+  ENDIF
 
 MOVE_SPEED      = $20
 OBST_SPEED      = (256 * 8) / (2 * 60)      ; every 2 seconds
@@ -189,7 +196,7 @@ SWAP_ROWS       = 1 << 4    ; affects 18 cells
 BURN_EMPTY      = 1 << 6
 BLOCK_EMPTY     = 1 << 7
 
-; chamState0|1 flags:
+; playerState0|1 flags:
 ;CHAM_HIDDEN     = 1 << 7
 
 STACK_SIZE      = 4 ; 2 only used in InitGame/NextRound
@@ -219,25 +226,25 @@ frameCnt        .byte
 ;---------------------------------------
 cellCntLst      ds  NUM_PLAYERS ; number of remaing cells per round
 cellCnt0        = cellCntLst
-;cellCnt1        = cellCntLst+1
-chamColorLst    ds  NUM_PLAYERS
-chamColor0      = chamColorLst
-;chamColor1      = chamColorLst+1
-chamStateLst    ds  NUM_PLAYERS
-chamState0      = chamStateLst
-;chamState1      = chamStateLst+1
+cellCnt1        = cellCntLst+1
+playerColorLst  ds NUM_PLAYERS
+playerColor0    = playerColorLst
+playerColor1    = playerColorLst+1
+playerStateLst  ds NUM_PLAYERS
+playerState0    = playerStateLst
+playerState1    = playerStateLst+1
 targetColorLst  ds NUM_PLAYERS
 targetColor0    = targetColorLst
-;targetColor1    = targetColorLst+1
-xPlayerLst      ds NUM_PLAYERS
-xPlayer0        = xPlayerLst
-;xPlayer1        = xPlayerLst+1
-yPlayerLst      ds NUM_PLAYERS
-yPlayer0        = yPlayerLst
-;yPlayer1        = yPlayerLst+1
+targetColor1    = targetColorLst+1
+playerXLst      ds NUM_PLAYERS
+playerX0        = playerXLst
+playerX1        = playerXLst+1
+playerYLst      ds NUM_PLAYERS
+playerY0        = playerYLst
+playerY1        = playerYLst+1
 moveSumLst      ds NUM_PLAYERS  ; joystick directional input delay counter
 moveSum0        = moveSumLst
-;moveSum1        = moveSumLst+1
+moveSum1        = moveSumLst+1
 ;---------------------------------------
 energyLst       ds 2
 energyLo        = energyLst
@@ -410,7 +417,7 @@ PD = KernelCode - RAMKernel     ; patch delta
 
     NEXT_PASS
 
-    ds      256, $ff
+    ds      256, $00
 
 ;---------------------------------------------------------------
 DrawKernel SUBROUTINE
@@ -494,22 +501,20 @@ TIM_DIGITS_END
     lda     #%01000100
     sta     PF2
     sta     PF0
-    lsr                         ;           #%00100010
+    lsr                         ;                   #%00100010
     sta     PF1                 ;  = 13
     lsr
-    sta     VDELP0              ;           enable
+    sta     VDELP0              ;                   enable
 
-    ldy     #NUM_ROWS           ;           = 6
+    ldy     #NUM_ROWS           ;                   = 6
     sty     .rowCount
-
-    bit     .digitPtrLst+11 ; must be a high pointer (with bit 6 set)
-;    bit     $ffff
 
     lda     #%110101            ; 2                 double width players, 8 pixel ball (4 would do too)
     sta     NUSIZ0              ; 3
     sta     NUSIZ1              ; 3 = 10    @18
 
-    bne     .prepareTargetBars
+    bit     .gfxPtr0+1          ;                   must be a high pointer (with bit 6 set)
+    bvs     .prepareTargetBars
 .contPrepare
     stx     GRP0                ;           VDELed!
 
@@ -525,8 +530,8 @@ TIM_DIGITS_END
     DEBUG_BRK
 
 ;---------------------------------------------------------------
-;.exitLoopJmp
-;    jmp     .exitLoop
+.exitLoopJmp
+    jmp     .exitLoop
 
 .bottom1                        ;           @02
     lda     #0                  ; 2
@@ -546,7 +551,7 @@ ExitKernel                      ;           @75
     lda     .tmpGfx1            ; 3
 .enterLoop                      ;           @07
     sta     GRP1                ; 3 =  9
-  IF NUM_PLAYERS = 2
+  IF TWO_PLAYERS = 1
     lda     targetColor1        ; 3
   ELSE
     lda     #0
@@ -556,7 +561,7 @@ ExitKernel                      ;           @75
     sta     COLUP0              ; 3 = 12    @25!    (goal < @26)
 ; loop:
     dec     .rowCount           ; 3
-    bmi     .exitLoop;Jmp       ; 2/3
+    bmi     .exitLoopJmp         ; 2/3
     ldy     .rowCount           ;  =  3
 ; calculate for new row:
     clv
@@ -565,12 +570,12 @@ ExitKernel                      ;           @75
 ;---------------------------------------------------------------
 ; target bars are drawn above and below player's row
 ; player 1:
-  IF NUM_PLAYERS = 2
+  IF TWO_PLAYERS = 1
     ldx     #$ff
-    cpy     yPlayer1
+    cpy     playerY1
     beq     .drawP1
     dey
-    cpy     yPlayer1
+    cpy     playerY1
     beq     .inyDrawP1
     inx
 .inyDrawP1
@@ -582,10 +587,10 @@ ExitKernel                      ;           @75
     stx     .tmpGfx1
 ; player 0:
     ldx     #$ff
-    cpy     yPlayer0
+    cpy     playerY0
     beq     .drawP0
     dey
-    cpy     yPlayer0
+    cpy     playerY0
     beq     .inyDrawP0
     inx
 .inyDrawP0
@@ -596,8 +601,8 @@ ExitKernel                      ;           @75
     txs                         ; 2 = ???
 ; setup chameleon pointers:
     lda     #<NoChameleon       ; 2
-  IF NUM_PLAYERS = 2
-    cpy     yPlayer1            ; 3
+  IF TWO_PLAYERS = 1
+    cpy     playerY1            ; 3
     bne     .emptyP1            ; 2/3
     lda     #<Chameleon         ; 2
 .emptyP1
@@ -605,10 +610,10 @@ ExitKernel                      ;           @75
     sta     .gfxPtr1
 ;    sta     ChamGfx1 + 1 - PD   ; 3 = 11/12
     lda     #<NoChameleon       ; 2
-    cpy     yPlayer0            ; 3
+    cpy     playerY0            ; 3
     bne     .emptyP0            ; 2/3
     lda     #<Chameleon         ; 2
-;    bit     chamState0          ;           CHAM_HIDDEN?
+;    bit     playerState0        ;                   CHAM_HIDDEN?
 ;    bpl     .emptyP0            ;
 ;    lda     #<Chameleon0+1      ; 2
 .emptyP0
@@ -620,11 +625,11 @@ ExitKernel                      ;           @75
     sta     HMBL                ;           @~40
 
 ;    ldx     targetColor0
-;    lda     xPlayer0
-;    cmp     xPlayer1
+;    lda     playerX0
+;    cmp     playerX1
 ;    bne     .posOk
-;    lda     yPlayer0
-;    eor     yPlayer1
+;    lda     playerY0
+;    eor     playerY1
 ;    cmp     #1
 ;    bne     .posOk
 ;    ldx     targetColor1
@@ -664,13 +669,13 @@ LoopPatch
 ;    bne     .loopWait
 
 ;    lda     #BLACK              ; 2
-;    bit     chamState0          ; 3                 CHAM_HIDDEN?
+;    bit     playerState0        ; 3                 CHAM_HIDDEN?
 ;    bpl     .notHidden0         ; 2/3
 ;    NOP_W                       ; 1
 ;.notHidden0
                                 ;           @62
-  IF NUM_PLAYERS = 2
-    ldy     chamColor1          ; 3
+  IF TWO_PLAYERS = 1
+    ldy     playerColor1        ; 3
     stx     GRP0                ; 3                 VDELed! X = 0
   ELSE
     ldy     #0
@@ -680,7 +685,7 @@ LoopPatch
     stx     NUSIZ0              ; 3         @74     @>=73!
 ;---------------------------------------
     sta     COLUBK              ; 3 = 15    @01
-    lda     chamColor0          ; 3
+    lda     playerColor0        ; 3
     stx     NUSIZ1              ; 3
     sta     COLUP0              ; 3
     sty     COLUP1              ; 3
@@ -710,14 +715,15 @@ LoopPatch
     sta     WSYNC
 ;---------------------------------------
 ; setup energy colors:
-    ldy     yPlayer0
+    ldy     playerY0
     lda     RowOfsTbl,y
     clc
-    adc     xPlayer0
+    adc     playerX0
     tay
 ; check if player is in empty, burning cell:
     lda     #NO_ENERGY_COL      ; 2
     ldx     colorLst_R,y
+    cpx     #BURN_COL
     bne     .energyStdCol       ; 3/2
     lda     gameState
     and     #IN_FOUND_CELL
@@ -1090,7 +1096,7 @@ VerticalBlank SUBROUTINE
     sta     gameState
     jsr     GetTargetColorIdx   ; extra stack usage only here!
     sta     targetColor0
-  IF NUM_PLAYERS = 2
+  IF TWO_PLAYERS = 1
     jsr     GetTargetColorIdx   ; extra stack usage only here!
     sta     targetColor1
   ENDIF
@@ -1122,7 +1128,7 @@ TIM_S
     bcs     .skipDirs
 ; move player:
     txa
-    ldy     xPlayer0
+    ldy     playerX0
     asl
     bcs     .skipRight
     iny
@@ -1139,7 +1145,7 @@ TIM_S
 .setXPlayer
 .skipLeft
     sty     .tmpXPlayer
-    ldy     yPlayer0
+    ldy     playerY0
     asl
     asl
     bcs     .skipDown
@@ -1157,7 +1163,6 @@ TIM_S
 .setYPlayer
 .skipUp
     sty     .tmpYPlayer
-  IF BLOCK_CELLS
     lda     roundFlags                  ;           BLOCK_FLAG?
     bpl     .skipBlockR
     lda     RowOfsTbl,y
@@ -1165,18 +1170,19 @@ TIM_S
     adc     .tmpXPlayer
     tay
     lda     colorLst_R,y
-    beq     .skipDirs
+    cmp     #EMPTY_COL
+    beq     .skipDirs                   ;           EMPTY_COL?
 .skipBlockR
   ENDIF
     lda     .tmpXPlayer
-    sta     xPlayer0
+    sta     playerX0
     lda     .tmpYPlayer
-    sta     yPlayer0
+    sta     playerY0
     ldy     #>MOVE_ENERGY
     lda     #<MOVE_ENERGY
     jsr     DecreaseEnergy
 ;    lda     #0
-;    sta     chamState0
+;    sta     playerState0
     lda     #GAME_RUNNING       ; remove IN_FOUND_CELL flag
     sta     gameState
 .skipDirs
@@ -1192,11 +1198,11 @@ TIM_S
 .skipResetColors
 
 ; position players and ball:
-    lda     xPlayer0
+    lda     playerX0
     ldx     #0
     jsr     SetXPosTarget
-  IF NUM_PLAYERS = 2
-    lda     xPlayer1
+  IF TWO_PLAYERS = 1
+    lda     playerX1
     inx
     jsr     SetXPosTarget
   ENDIF
@@ -1244,34 +1250,56 @@ TIM_OVS
     START_TMP
 .tmpColorIdx    ds 1        ; for clearing cell
 .tmpColor       ds 1        ; for difference calculation and empty cell
-.tmpDiff        ds 1
+;.tmpDiff        ds 1
 .hueDiff        ds 1
 .valDiff        ds 1
 TMP_BASE_PLR    = .
-;.tmpVal         = .tmpDiff
+;  IF SKIPPED_VAL = 0
+.tmpVal         = .valDiff
+;  ENDIF
     END_TMP
 
 ; get cell-index and -color:
-    ldy     yPlayer0
+    ldy     playerY0
     lda     RowOfsTbl,y
     clc
-    adc     xPlayer0
+    adc     playerX0
     sta     .tmpColorIdx
     tay
-    lda     colorLst_R,y                ; EMPTY_COL?
+    lda     colorLst_R,y
     sta     .tmpColor
 ; calculate hue-diff:
     lsr
     lsr
     lsr
     lsr
-    tay
-    lda     targetColor0                ; chamColor0
+    tay                                 ; cell color hue
+
+    lda     .tmpColor
+    and     #$0f
+    sec
+    sbc     ValDiffTbl,y                ; 0 or 2
+    sta     .tmpVal                     ; adjusted cell color value hue
+
+    lda     targetColor0                ; playerColor0
     lsr
     lsr
     lsr
     lsr
-    tax                                 ; TODO: replace for 2-player code
+    tax                                 ; player's color hue; TODO: replace for 2-player code
+
+    lda     targetColor0
+    and     #$0f
+    sec
+    sbc     ValDiffTbl,x                ; 0 or 2, adjusted player color value hue
+    sbc     .tmpVal
+    bcs     .posValDiff
+    eor     #$ff
+    adc     #1
+.posValDiff
+    lsr
+    sta     .valDiff
+
     lda     HueIdx,x
     sec
     sbc     HueIdx,y
@@ -1286,7 +1314,7 @@ TMP_BASE_PLR    = .
 .hueOk
     sta     .hueDiff
 ; calculate value-diff:
-   IF SKIPPED_VAL = 1
+  IF SKIPPED_VAL = 1 ;{
 ; use value-diff table if values are skipped
     lda     targetColor0
     and     #$0f
@@ -1305,12 +1333,13 @@ TMP_BASE_PLR    = .
     eor     #$ff
     adc     #1
 .posValDiff
-   ELSE ;{
+  ENDIF ;}
+  IF 0 ;{
     lda     .tmpColor
     and     #$0f
     lsr
     sta     .tmpVal
-    lda     targetColor0                ; chamColor0
+    lda     targetColor0                ; playerColor0
     and     #$0f
     sec
     sbc     .tmpVal
@@ -1321,20 +1350,19 @@ TMP_BASE_PLR    = .
     lsr
 .wait4ever                              ; DEBUG, remove!
     bcs     .wait4ever
-   ENDIF ;}
-    sta     .valDiff
+  ENDIF ;}
 ; calculate energy-speed:
     lda     gameState                   ; in found cell?
     and     #IN_FOUND_CELL              ;
     bne     .useDiff0                   ;  yes, used fixed energy rate
-    lda     .tmpColor                   ; EMPTY_COL?
+    lda     .tmpColor                   ; BURN_COL?
     bne     .calcDiff                   ;  no, normal calculation
 ;    bit     roundFlags                  ; BURN_EMPTY?
 ;    bvc     .useDiff0                  ;  no, used fixed energy rate
-  IF DEBUG
-.w4e
-    bvc     .w4e
-  ENDIF
+;  IF DEBUG
+;.w4e
+;    bvc     .w4e
+;  ENDIF
     lda     soundIdx1
     bne     .skipBurnSound
     sta     AUDF1
@@ -1383,6 +1411,11 @@ TMP_BASE_PLR    = .
     and     #BLOCK_EMPTY|BURN_EMPTY
     beq     .skipEmpty
     ldy     .tmpColorIdx
+    and     #BLOCK_EMPTY
+    bne     .blockCol
+    lda     #BURN_COL
+    NOP_W
+.blockCol
     lda     #EMPTY_COL
     sta     colorLst_W,y
     lda     #GAME_RUNNING|IN_FOUND_CELL
@@ -1390,9 +1423,9 @@ TMP_BASE_PLR    = .
 .skipEmpty
 ; update colors for next target
 ;    lda     targetColor0
-;    sta     chamColor0
+;    sta     playerColor0
 ;    lda     #CHAM_HIDDEN
-;    sta     chamState0
+;    sta     playerState0
 ; TODO: compare with current target color
     jsr     GetTargetColorIdx
     sta     targetColor0
@@ -1819,7 +1852,9 @@ GetRandomColorIdx SUBROUTINE
     lsr                     ; TODO: improve
 .cellOk
     tay
-    lda     colorLst_R,y    ; EMPTY_COL?
+    lda     colorLst_R,y
+    beq     .repeatRandom   ; BURN_COL!
+    cmp     #EMPTY_COL
     beq     .repeatRandom
     rts
 
@@ -1837,15 +1872,17 @@ GetTargetColorIdx SUBROUTINE
     lsr                     ; TODO: improve
 .cellOk
     adc     #NUM_COLS+2
-    adc     xPlayer0
-    ldy     yPlayer0
+    adc     playerX0
+    ldy     playerY0
     adc     RowOfsTbl,y
     cmp     #NUM_CELLS
     bcc     .cellOk2
     sbc     #NUM_CELLS
 .cellOk2
     tay
-    lda     colorLst_R,y    ; EMPTY_COL?
+    lda     colorLst_R,y    ;
+    beq     .repeatRandom   ; BURN_COL!
+    cmp     #EMPTY_COL
     beq     .repeatRandom
     rts
 
@@ -1878,7 +1915,7 @@ DecreaseEnergy SUBROUTINE
     sty     AUDF0
     lda     #0
     sta     targetColor0
-    sta     chamColor0
+    sta     playerColor0
 .contGame
     sta     energyHi
     rts
@@ -1887,10 +1924,10 @@ DecreaseEnergy SUBROUTINE
 GameInit SUBROUTINE
 ;---------------------------------------------------------------
     lda     #$0e
-    sta     chamColor0
-  IF NUM_PLAYERS = 2
+    sta     playerColor0
+  IF TWO_PLAYERS = 1
     lda     #$ac
-    sta     chamColor1
+    sta     playerColor1
   ENDIF
     ldx     #KernelCodeEnd-KernelCode-1
 .loopCopy
@@ -1949,16 +1986,16 @@ NextRound
     sta     obstSum
 
     ldx     #NUM_COLS/2
-  IF NUM_PLAYERS = 1
+  IF TWO_PLAYERS = 0
     ldy     #NUM_ROWS/2
   ELSE
     ldy     #NUM_ROWS/2-1
-    stx     xPlayer1
-    sty     yPlayer1
+    stx     playerX1
+    sty     playerY1
     ldy     #NUM_ROWS/2+1
   ENDIF
-    stx     xPlayer0
-    sty     yPlayer0
+    stx     playerX0
+    sty     playerY0
 InitColors
     START_TMP
 .colorPtrW  ds 2
@@ -1969,6 +2006,7 @@ InitColors
     lda     #>colorLst_W
     sta     .colorPtrW+1
     ldy     #NUM_ROWS-1
+    clc
 .loopRows
     sty     .row
     lda     RowOfsTbl,y
@@ -1977,7 +2015,7 @@ InitColors
     ldy     #NUM_COLS-1
 .loopColumns
     txa                         ; 2
-    ora     ColorTbl,y          ; 4
+    adc     ColorTbl,y          ; 4
     sta     (.colorPtrW),y      ; 6
     dey                         ; 2
     bpl     .loopColumns        ; 3/2=17/16
@@ -2012,7 +2050,7 @@ InitColors
 
     lda     #0
     sta     targetColor0
-  IF NUM_PLAYERS = 2
+  IF TWO_PLAYERS = 1
     sta     targetColor1
   ENDIF
 
@@ -2253,21 +2291,37 @@ _IDX    SET _IDX + 1
 ColorTbl
 ;ORANGE  = $30
 ;    .byte   YELLOW         ; $10
-    .byte   BROWN           ; $20
+    .byte   BROWN+2         ; $20
 ;    .byte   ORANGE          ; $30  skipped
     .byte   RED             ; $40
     .byte   MAUVE           ; $50
 ;    .byte   VIOLET          ; $60
     .byte   PURPLE          ; $70
-    .byte   BLUE            ; $80
-    .byte   BLUE_CYAN       ; $90
-    .byte   CYAN            ; $a0
+    .byte   BLUE+2          ; $80
+    .byte   BLUE_CYAN+2     ; $90
+    .byte   CYAN+2          ; $a0
 ;    .byte   CYAN_GREEN      ; $b0
     .byte   GREEN           ; $c0
 ;    .byte   GREEN_YELLOW    ; $d0
     .byte   GREEN_BEIGE     ; $e0
 ;;    .byte   BEIGE          ; $f0  skipped
 NUM_COLS    = . - ColorTbl  ; 9
+ValDiffTbl = . - 2
+;    .byte   $ff     ; YELLOW          $10
+    .byte   2       ; BROWN           $20
+    .byte   $ff     ; (ORANGE)        $30   skipped
+    .byte   0       ; RED             $40
+    .byte   0       ; MAUVE           $50
+    .byte   $ff     ; VIOLET          $60   skipped
+    .byte   0       ; PURPLE          $70
+    .byte   2       ; BLUE            $80
+    .byte   2       ; BLUE_CYAN       $90
+    .byte   2       ; CYAN            $a0
+    .byte   $ff     ; CYAN_GREEN      $b0   skipped
+    .byte   0       ; GREEN           $c0
+    .byte   $ff     ; GREEN_YELLOW    $d0   skipped
+    .byte   0       ; GREEN_BEIGE     $e0
+                    ; (BEIGE)         $f0
 HueIdx = . - 2
 ;    .byte   $ff     ; YELLOW          $10
     .byte   0       ; BROWN           $20
@@ -2284,24 +2338,37 @@ HueIdx = . - 2
     .byte   $ff     ; GREEN_YELLOW    $d0   skipped
     .byte   8       ; GREEN_BEIGE     $e0
                     ; (BEIGE)         $f0
-  ELSE ; PAL
+  ELSE ; PAL --------------------------------------------------
 PAL_WHITE   = BLACK+$10     ; $10
 ColorTbl
-    .byte   YELLOW          ; $20
+    .byte   YELLOW+2        ; $20
     .byte   ORANGE          ; $40
     .byte   RED             ; $60
     .byte   MAUVE           ; $80
-    .byte   VIOLET          ; $a0
+    .byte   VIOLET+2        ; $a0
 ;    .byte   PURPLE          ; $c0
-    .byte   BLUE            ; $d0
+    .byte   BLUE+2          ; $d0
 ;    .byte   BLUE_CYAN       ; $b0
     .byte   CYAN            ; $90
     .byte   CYAN_GREEN      ; $70
 ;    .byte   GREEN           ; $50
-    .byte   GREEN_YELLOW    ; $30
+    .byte   GREEN_YELLOW+2  ; $30
 ;    .byte   BLACK           ; $10
 
 NUM_COLS    = . - ColorTbl  ; 13
+ValDiffTbl = . - 2
+    .byte   2       ; YELLOW          $20
+    .byte   2       ; GREEN_YELLOW    $30
+    .byte   0       ; ORANGE          $40
+    .byte   $ff     ; GREEN           $50   skipped
+    .byte   0       ; RED             $60
+    .byte   0       ; CYAN_GREEN      $70
+    .byte   0       ; MAUVE           $80
+    .byte   0       ; CYAN            $90
+    .byte   2       ; VIOLET          $a0
+    .byte   $ff     ; BLUE_CYAN       $b0   skipped
+    .byte   $ff     ; PURPLE          $c0   skipped
+    .byte   2       ; BLUE            $d0
 HueIdx = . - 2
 ;    .byte   $ff     ; PAL_WHITE       $10
     .byte   0       ; YELLOW          $20
@@ -2320,15 +2387,15 @@ HueIdx = . - 2
 
 LumTbl
   IF NTSC
-SKIPPED_VAL = 1
+SKIPPED_VAL = 0
     .byte   $00
     .byte   $02
     .byte   $04
     .byte   $06
     .byte   $08
     .byte   $0a
-;    .byte   $0c    ; skipped
-    .byte   $0e
+  .byte   $0c    ; skipped
+;    .byte   $0e
    IF SKIPPED_VAL = 1
 ValIdxTbl
     .byte   $00
@@ -2337,19 +2404,19 @@ ValIdxTbl
     .byte   $03
     .byte   $04
     .byte   $05
-    .byte   $ff     ; skipped
+;    .byte   $ff     ; skipped
     .byte   $06
    ENDIF
-  ELSE ;/NTSC
-SKIPPED_VAL = 1
+  ELSE ; PAL
+SKIPPED_VAL = 0
     .byte   $00
     .byte   $02
     .byte   $04
     .byte   $06     ; seems identical with $08 on Sony CRT
     .byte   $08
     .byte   $0a     ; seems identical with $0c on Sony CRT
-;    .byte   $0c    ; skipped
-    .byte   $0e
+    .byte   $0c    ; skipped
+;    .byte   $0e
    IF SKIPPED_VAL = 1
 ValIdxTbl
     .byte   $00
@@ -2358,10 +2425,10 @@ ValIdxTbl
     .byte   $03
     .byte   $04
     .byte   $05
-    .byte   $ff     ; skipped
+;    .byte   $ff     ; skipped
     .byte   $06
    ENDIF
-  ENDIF
+  ENDIF ; /PAL
 
 EnergyR
     .byte   %11111110
