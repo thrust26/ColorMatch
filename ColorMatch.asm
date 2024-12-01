@@ -1301,14 +1301,6 @@ TMP_BASE_OBST   = .             ; .tmpObst has to be preserved until the end of 
 ; row: 0 = right, 1 = left
 ; col: 2 = down,  3 = up
     bcc     .scrollRow
-;    and     ScrollMask,x        ; 0..1, 2..3, 0..3; %01, %10, %11
-;    ora     DirOfs,x            ; 0, 2, 0
-;    tay
-;    lda     DirBits,y
-;    asl                         ; A = ????....
-;    tax
-;    bcc     .scrollRow
-
 ; determine col:
 .randomCol
     jsr     NextRandom          ; TODO: improve
@@ -1336,7 +1328,6 @@ TMP_BASE_OBST   = .             ; .tmpObst has to be preserved until the end of 
 .validRow
     tay                         ; Y = row
     lda     RowOfsTbl,y
-;    cpx     #%01111110          ; right?
     cpx     #0                  ; right?
     bne     .scrollLeft
     adc     #NUM_COLS-2
@@ -1351,9 +1342,6 @@ TMP_BASE_OBST   = .             ; .tmpObst has to be preserved until the end of 
     lda     colorLst_R,y
     pha
 ; get direction:
-;    txa
-;    asl
-;    bcs     .skipRight
     dex
     bpl     .skipRight
 ;---------------------------------------------------------------
@@ -1369,7 +1357,6 @@ TMP_BASE_OBST   = .             ; .tmpObst has to be preserved until the end of 
 
 ;---------------------------------------------------------------
 .skipRight
-;    bmi     .skipLeft
     dex
     bpl     .skipLeft
 ; move cells left:
@@ -1385,9 +1372,6 @@ TMP_BASE_OBST   = .             ; .tmpObst has to be preserved until the end of 
 ;---------------------------------------------------------------
 .skipLeft
 ; check for down:
-;    asl
-;    asl
-;    bcs     .skipDown
     dex
     bpl     .skipDown
 ; move cells down:
@@ -1589,15 +1573,6 @@ TMP_BASE_OBST   = .             ; .tmpObst has to be preserved until the end of 
     sta     ENABL
     lda     #%110000
     sta     CTRLPF
-;    sta     WSYNC
-;;---------------------------------------
-;    lda     #%10
-;    sta     ENABL
-;    lda     #%110000
-;    sta     CTRLPF
-;    SLEEP   57
-;    sta     RESBL
-
 ; /VerticalBlank
 
     jmp     DrawKernel
@@ -1737,19 +1712,10 @@ TMP_BASE_PLR    = .
   ENDIF
     jsr     CalcDiffs
 ; calculate energy-speed:
-;    lda     gameState                   ; in found cell?
-;    and     #IN_FOUND_CELL              ;
-;    bne     .useDiff0                   ;  yes, used fixed energy rate
     bit     playerState0                ; IN_FOUND_CELL?
     bmi     .useDiff0                   ;  yes, used fixed energy rate
     lda     .cellColor                  ; BURN_COL?
     bne     .calcDiff                   ;  no, normal calculation
-;    bit     roundFlags                  ; BURN_EMPTY?
-;    bvc     .useDiff0                  ;  no, used fixed energy rate
-;  IF DEBUG
-;.w4e
-;    bvc     .w4e
-;  ENDIF
     lda     soundIdx1
     bne     .skipBurnSound
     sta     AUDF1
@@ -1761,8 +1727,6 @@ TMP_BASE_PLR    = .
 .skipBurnSound
     lda     #BURN_ENERGY
     bne     .contDecEnergy
-
-; calculate hue difference:
 
 .calcDiff
   IF SNEAK_VAR
@@ -1818,8 +1782,6 @@ TMP_BASE_PLR    = .
 .blockCol
     lda     #EMPTY_COL
     sta     colorLst_W,y
-;    lda     #GAME_RUNNING|IN_FOUND_CELL
-;    sta     gameState
 .skipEmpty
     lda     playerState0
     ora     #IN_FOUND_CELL              ; TODO: set always or only in block/burn mode?
@@ -1870,19 +1832,13 @@ TMP_BASE_PLR    = .
   IF SNEAK_VAR
     bit     variation           ; SNEAK_FLAG?
     bvc     .endSneak           ;  no, allow moving
-;    lda     frameCnt
-;    and     #$03
-;    bne     .endSneak
     lda     adaptSum0
     clc
     adc     #ADAPT_SPEED
     sta     adaptSum0
     bcc     .endSneak
-;    bit     playerState0        ; COLOR_MATCHED?
-;    bvs     .endSneak           ;  yes, skip adapting
     lda     playerColor0
     jsr     CalcDiffs
-DEBUG1
 ; TODO: adapt hue and val at the same time? favors diagonals
     lda     .absHueDiff
     beq     .adaptVal
@@ -2531,20 +2487,6 @@ SneakIcon    ; Chameleon
     .byte   %00011100
     .byte   %01011101
     .byte   %00110110
-
-;RaceIcon     ; arrows
-;    .byte   %00000000
-;    .byte   %00000000
-;    .byte   %00000000
-;    .byte   %00000000
-;    .byte   %00000000
-;    .byte   %00000000
-;    .byte   %00000000
-;    .byte   %00000000
-;    .byte   %00000000
-;    .byte   %00000000
-
-
 CoarseIcon
     .byte   %00011100
     .byte   %00111110
