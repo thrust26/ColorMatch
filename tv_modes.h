@@ -42,7 +42,7 @@ WHITE           = $0e
   IF NTSC_COL
 YELLOW          = $10
 BROWN           = $20
-;ORANGE          = $30
+;ORANGE          = $30       ; unused
 RED             = $40
 MAUVE           = $50
 VIOLET          = $60
@@ -54,7 +54,7 @@ CYAN_GREEN      = $b0
 GREEN           = $c0
 GREEN_YELLOW    = $d0
 GREEN_BEIGE     = $e0
-;BEIGE           = $f0
+;BEIGE           = $f0       ; unused
   ELSE
 YELLOW          = $20
 BROWN           = YELLOW
