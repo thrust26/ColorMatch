@@ -51,6 +51,8 @@
 ; + display adapted chameleon (eyes, nose, mouth in matching gray)
 ; + while adapting chameleon cannot move
 ; - make code 2 player ready (loop over X)
+;   - define two player colors (or different grpahics?)
+;   - define when which energy bar and score is displayed
 
 ; DONEs:
 ; + game variations:
@@ -82,24 +84,12 @@
 ; + change controls (move players instead of cells)
 
 ; Vertical Blank:
-; - switches
-; - game state
-; - joystick input
-; - kernel setup
-; OverScan:
-; - energy
-; - match
-; - obstacles
-; - sound
-
-; TODO:
-; Vertical Blank:
 ; + switches
 ; + game state
-; - obstacles
+; + obstacles
 ; + kernel setup
 ; OverScan:
-; - joystick input
+; + joystick input
 ; + energy
 ; + match
 ; + sound
@@ -167,8 +157,9 @@ NO_ENERGY_CX_COL    = RED+$8    ;BLACK2+$2
 EMPTY_COL           = BLACK2+2
 BURN_COL            = BLACK
 
-P0_COL              = $0e
-P1_COL              = $00
+SCORE_COL           = BLACK|$0e       ; TODO: different for player 0 and 1
+PLAYER0_COL         = $0e;CYAN
+PLAYER1_COL         = $0e;GREEN_YELLOW
 DEAD_COL            = $06
 
 
@@ -215,6 +206,7 @@ NUM_TMPS        = DIGIT_BYTES * 2
 GAME_RUNNING    = 1 << 7
 ROUND_DONE      = 1 << 6
 SWCHB_PRESSED   = 1 << 5
+PLAYER_TWO      = 1 << 4    ; TODO
 ;...
 ;IN_FOUND_CELL   = 1 << 2    ; 2x for 2 players
 SELECT_MODE     = 1 << 1
@@ -495,9 +487,14 @@ DrawKernel SUBROUTINE
     END_TMP
 
 ; state :   gfx      color (constant)
+;------------------------------------
 ; none  : none       doesn't matter
 ; shown : chameleon  chameleon color
-; hidden: outline    outline color
+; hidden: outline    outline color (grey)
+
+; TODO: two player mode:
+; - two chameleon colors with value adjusted depending on cell value
+; - same two colors for energy bar, progress bar and score
 
     START_TMP tmpVars + DIGIT_BYTES
 .rowCount       ds  1
@@ -512,20 +509,59 @@ DrawKernel SUBROUTINE
 
     ldx     #NUM_PLAYERS-1
 .playerColorLoop
+
     lda     playerStateLst,x        ; COLOR_MATCHED? (bit 6)
-    asl
-    asl
-    lda     playerColorLst,x
-  IF SNEAK_VAR
-;    bit     playerStateLst,x        ; COLOR_MATCHED?
-;    bvc     .playerHidden
-    bcc     .playerNotHidden
+    and     #COLOR_MATCHED
+    bne     .playerNotHidden
+    ldy     playerYLst,x
+    lda     RowOfsTbl,y
+    clc
+    adc     playerXLst,x
+    tay
+    lda     colorLst_R,y
+    pha
+    lsr
+    lsr
+    lsr
+    lsr
+    tay
+    pla
     and     #$0f
+    sec
+    sbc     ValDiffTbl,y
+    NOP_W
 .playerNotHidden
-  ENDIF
+    lda     #$0e
     sta     .playerColLst,x
     dex
     bpl     .playerColorLoop
+
+
+;    ldy     playerYLst,x
+;    lda     RowOfsTbl,y
+;    clc
+;    adc     playerXLst,x
+;    tay
+;    lda     colorLst_R,y
+;    and     #$0f
+;    eor     #$08
+;    sta     tmpVars+6
+;    lda     playerStateLst,x        ; COLOR_MATCHED? (bit 6)
+;    asl
+;    asl
+;    lda     playerColorLst,x
+;  IF SNEAK_VAR
+;;    bit     playerStateLst,x        ; COLOR_MATCHED?
+;;    bvc     .playerHidden
+;    bcc     .playerNotHidden
+;    and     #$0f
+;.playerNotHidden
+;;    and     #$f0
+;    ora     tmpVars+6
+;  ENDIF
+;    sta     .playerColLst,x
+;    dex
+;    bpl     .playerColorLoop
 
     lda     #<colorLst_R + NUM_COLS * (NUM_ROWS - 1)
     sta     .colorPtr
@@ -642,7 +678,8 @@ ExitKernel                      ;           @75
   IF TWO_PLAYERS = 1
     cpy     playerY1            ; 3
     bne     .emptyP1            ; 2/3
-    lda     #<Chameleon         ; 2
+;    lda     #<Chameleon         ; 2
+    lda     #<Player1Gfx
 .emptyP1
   ENDIF
     sta     .gfxPtr1
@@ -650,7 +687,8 @@ ExitKernel                      ;           @75
     lda     #<NoChameleon       ; 2
     cpy     playerY0            ; 3
     bne     .emptyP0            ; 2/3
-    lda     #<Chameleon         ; 2
+;    lda     #<Chameleon         ; 2
+    lda     #<Player0Gfx
     bit     playerState0        ;                   COLOR_MATCHED?
     bvc     .emptyP0            ;
     lda     #<Chameleon0        ; 2
@@ -763,22 +801,31 @@ LoopPatch
     tay
 ; check if player is in empty, burning cell:
     lda     colorLst_R,y        ; 4
-    tay                         ; 2
-    lda     #NO_ENERGY_COL      ; 2
-    cpy     #BURN_COL
+    ldy     #NO_ENERGY_COL      ; 2
+    cmp     #BURN_COL
     bne     .energyStdCol       ; 3/2
-    ldy     playerStateLst,x
+    lda     playerStateLst,x
     bmi     .energyStdCol       ; 3/2
     lda     roundFlags
     and     #BURN_EMPTY
     beq     .energyStdCol
-    lda     #NO_ENERGY_CX_COL   ; 2
-    ldy     #ENERGY_CX_COL      ; 2
-    NOP_W
+    ldy     #NO_ENERGY_CX_COL   ; 2
+    lda     #ENERGY_CX_COL      ; 2
+    bne     .setEnergyCol
+;    NOP_W
 .energyStdCol
-    ldy     #ENERGY_COL         ; 2
-    sta     .noEnergyCol        ; 3
-    sty     .energyCol          ; 3
+;    lda     #ENERGY_COL         ; 2
+    ldx     #0
+    lda     gameState
+    and     #PLAYER_TWO
+    beq     .playerZero
+    lda     #PLAYER0_COL|$0a
+    NOP_W
+.playerZero
+    lda     #PLAYER1_COL|$0a
+.setEnergyCol
+    sty     .noEnergyCol        ; 3
+    sta     .energyCol          ; 3
     sta     WSYNC
 ;---------------------------------------
     lda     #%100001            ; 2         quad size ball, reflected PF
@@ -894,7 +941,7 @@ WaitBar
 ; pre-prepare digit kernel:
     lda     #%011               ; 2
     sta     NUSIZ0              ; 3
-    lda     #$0e                ; 2         TODO? make variable?
+    lda     #SCORE_COL          ; 2         TODO? make variable?
     sta     COLUP0              ; 3
 
     ldx     #BAR_HEIGHT         ; 3
@@ -935,7 +982,7 @@ WaitBar
                                 ;           @50
     lda     #>DigitGfx          ; 2
     sta     .ballPtr+1          ; 3
-    ldy     #$0e                ; 2
+    ldy     #SCORE_COL          ; 2
     lda     #$10|%011           ; 2
     sta     HMP1                ; 3
     stx     HMBL                ; 3         @60
@@ -1067,6 +1114,14 @@ VerticalBlank SUBROUTINE
     lda     #77
   ENDIF
     sta     TIM64T
+
+    lda     frameCnt
+    and     #$3f
+    bne     .skipSwitch
+    lda     gameState
+    eor     #PLAYER_TWO
+    sta     gameState
+.skipSwitch
 
 ;---------------------------------------------------------------
 ; Check Switches and Fire Button
@@ -1554,6 +1609,13 @@ TMP_BASE_OBST   = .             ; .tmpObst has to be preserved until the end of 
 ; 1032
 TIM_DIGITS_START
     ldx     #0              ; or 1; TODO: TWO_PLAYERS
+    bit     variation
+    bpl     .playerOne
+    lda     gameState
+    and     #PLAYER_TWO
+    beq     .playerOne
+    inx
+.playerOne
     lda     scoreLoLst,x
     sta     .scoreLst
     lda     scoreMidLst,x
@@ -2211,10 +2273,13 @@ StartGame
     tax
 .contInit
     sty     scoreLo0                    ; score or selected round
+    sty     scoreLo1
     stx     scoreMid0
+    stx     scoreMid1
     sta     gameState
     ldy     #0
     sty     scoreHi0                    ; difficulty display set outside
+    sty     scoreHi1
     sty     energyLo0
     sty     energyLo1
     ldy     #MAX_ENERGY+1               ; will be reduced immediately
@@ -2333,8 +2398,8 @@ InitColors
 .skipSneakColors
   ENDIF
     lda     #0
-    ldx     #P0_COL
-    ldy     #P1_COL
+    ldx     #PLAYER0_COL
+    ldy     #PLAYER1_COL
 .setPlayerColors
     sta     playerState0
     stx     playerColor0
@@ -2787,28 +2852,15 @@ HueIdx = . - 2
 
 LumTbl
   IF NTSC
-SKIPPED_VAL = 0
     .byte   $00
     .byte   $02
     .byte   $04
     .byte   $06
     .byte   $08
     .byte   $0a
-  .byte   $0c    ; skipped
+    .byte   $0c    ; skipped
 ;    .byte   $0e
-   IF SKIPPED_VAL = 1
-ValIdxTbl
-    .byte   $00
-    .byte   $01
-    .byte   $02
-    .byte   $03
-    .byte   $04
-    .byte   $05
-;    .byte   $ff     ; skipped
-    .byte   $06
-   ENDIF
   ELSE ; PAL
-SKIPPED_VAL = 0
     .byte   $00
     .byte   $02
     .byte   $04
@@ -2817,16 +2869,6 @@ SKIPPED_VAL = 0
     .byte   $0a     ; seems identical with $0c on Sony CRT
     .byte   $0c    ; skipped
 ;    .byte   $0e
-   IF SKIPPED_VAL = 1
-ValIdxTbl
-    .byte   $00
-    .byte   $01
-    .byte   $02
-    .byte   $03
-    .byte   $04
-    .byte   $05
-;    .byte   $ff     ; skipped
-    .byte   $06
    ENDIF
   ENDIF ; /PAL
 
@@ -2872,7 +2914,7 @@ EnergyF
     .byte   %00000001
     .byte   %00000000
 
-ChameleonGfx = . - 2
+PlayerGfx = . - 2
 Chameleon  = . - 2
     ds  (CELL_H-CHAMELEON_H+1)/2-1, 0
 ChamGfxStart
@@ -2912,7 +2954,49 @@ Chameleon0 = . - 1 - 7
     .byte   %00000000
     .byte   %00000000
     ds  (CELL_H-CHAMELEON_H)/2-1, 0
-    CHECKPAGE ChameleonGfx
+
+
+Player0Gfx = . - 2
+    ds  (CELL_H-CHAMELEON_H+1)/2-1+1, 0
+    .byte   %11111111
+    .byte   %11111111
+    .byte   %10000001
+    .byte   %10000001
+    .byte   %10011001
+    .byte   %10000001
+    .byte   %10000001
+    .byte   %10100101
+    .byte   %10100101
+    .byte   %10000001
+    .byte   %10000001
+    .byte   %11111111
+    .byte   %11111111
+; 66
+;    .byte   %11111111
+    ds  (CELL_H-CHAMELEON_H)/2-1+1, 0
+
+Player1Gfx = . - 2
+    ds  (CELL_H-CHAMELEON_H+1)/2-1, 0
+    .byte   %00011000
+    .byte   %00111100
+    .byte   %01100110
+    .byte   %01000010
+    .byte   %11000011
+    .byte   %10011001
+    .byte   %10000001
+    .byte   %10000001
+    .byte   %10100101
+    .byte   %10100101
+    .byte   %11000011
+    .byte   %01000010
+    .byte   %01100110
+    .byte   %00111100
+    .byte   %00011000
+; 68
+    ds  (CELL_H-CHAMELEON_H)/2-1, 0
+    CHECKPAGE PlayerGfx
+
+
 
 VolumeTbl
     .byte   0
